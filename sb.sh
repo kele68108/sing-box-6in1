@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v666) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 (v666) ✨${NC}                    ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -163,9 +163,9 @@ install_deps() {
 
 safe_download() {
     local url=$1; local dest=$2
-    msg_info "正在拉取核心组件: $(basename $dest)..."
+    msg_info "正在下载核心组件: $(basename $dest)..."
     local http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
-    if [ "$http_code" != "200" ]; then msg_error "文件拉取失败！(HTTP: $http_code)"; rm -f "$dest"; return 1; fi
+    if [ "$http_code" != "200" ]; then msg_error "文件下载失败！(HTTP: $http_code)"; rm -f "$dest"; return 1; fi
     if [ ! -s "$dest" ]; then msg_error "下载失败！文件为空。"; rm -f "$dest"; return 1; fi
     return 0
 }
@@ -406,16 +406,16 @@ install_fast() {
     WARP_MODE="1"; WARP_DOMAINS=""
     VD_MODE="2"; VD_DOMAIN=""
 
-    msg_info "正在写入底层架构并拉起守护进程..."
+    msg_info "正在写入底层架构并启动守护进程..."
     generate_config; setup_services
-    echo ""; msg_success "一键部署圆满完成！6 大极速协议已在后台稳稳运行。"
+    echo ""; msg_success "一键部署已完成！"
     sleep 2
 }
 
 # --- 自定义按需部署 ---
 install_custom() {
     print_logo
-    echo -e "${BG_PURPLE} 自定义部署 ${NC} ${YELLOW}进入架构师调优模式...${NC}\n"
+    echo -e "${BG_PURPLE} 自定义部署 ${NC} ${YELLOW}进入按需部署模式...${NC}\n"
     check_existing || return
     
     install_deps; install_singbox; install_argo
@@ -425,7 +425,7 @@ install_custom() {
     PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
     
-    echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议按需开启，节省端口)"
+    echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
     reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd; [ "${c_vd:-y}" == "y" ] && ENABLE_VD=1 || ENABLE_VD=0
     reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re; [ "${c_re:-y}" == "y" ] && ENABLE_RE=1 || ENABLE_RE=0
     reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy; [ "${c_hy:-y}" == "y" ] && ENABLE_HY=1 || ENABLE_HY=0
@@ -465,9 +465,9 @@ install_custom() {
     WARP_MODE="1"; WARP_DOMAINS=""
     VD_MODE="2"; VD_DOMAIN=""
 
-    echo ""; msg_info "正在写入底层架构并拉起守护进程..."
+    echo ""; msg_info "正在写入底层架构并启动守护进程..."
     generate_config; setup_services
-    echo ""; msg_success "自定义部署圆满完成！"
+    echo ""; msg_success "自定义部署已完成！"
     sleep 2
 }
 
@@ -681,7 +681,7 @@ uninstall_script() {
 
     find "$SB_DIR" -type f ! -name "sub.txt" -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
-    msg_success "系统已恢复纯净状态 (自定义文本已保留)。江湖再见！"; rm -f "$0"; exit 0
+    msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
 }
 
 main_menu() {
@@ -695,7 +695,7 @@ main_menu() {
         echo -e "   ${GREEN}[1]${NC} 🚀 一键快速部署 / 重置引擎"
         echo -e "   ${GREEN}[2]${NC} 🛠️  自定义按需部署 / 重置引擎"
         echo -e "   ${GREEN}[3]${NC} ⚙️  单独协议参数管理 (端口/密码/证书/停用)"
-        echo -e "   ${GREEN}[4]${NC} 🌐 调教 WARP 智能分流规则 (Alpine不可用)"
+        echo -e "   ${GREEN}[4]${NC} 🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
         echo -e "   ${GREEN}[5]${NC} 🔗 查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         echo -e "   ${RED}[9]${NC} 🗑️  彻底卸载 (安全清理服务与残留)"
