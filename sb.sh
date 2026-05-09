@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 极致稳定架构版 (v6.5 Cyber Retro-punk 版)
-# 特性：纯 ASCII 骇客终端，繁体中文，全协议默认，独立 Argo
+# Sing-box 6-in-1 极致稳定架构版
+# 特性：纯 ASCII 终端，繁体中文，全协议默认，独立 Argo
 # ==========================================
 
 # --- 扩展視覺與色彩引擎 ---
@@ -29,7 +29,7 @@ print_logo() {
     echo -e "${CYAN} ||  ███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗ || ${NC}"
     echo -e "${CYAN} ||  ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ || ${NC}"
     divider
-    echo -e "${CYAN} ||         ${PURPLE}${BOLD}[SYS.CORE] Kele's Advanced Architecture [v6.5]${NC}         ${CYAN}|| ${NC}"
+    echo -e "${CYAN} ||         ${PURPLE}${BOLD}[SYS.CORE] Kele666's Advanced Architecture${NC}         ${CYAN}|| ${NC}"
     echo -e "${CYAN} \\\\================================================================// ${NC}"
     echo ""
 }
