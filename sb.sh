@@ -4,32 +4,31 @@
 # Sing-box 6-in-1 极致稳定架构版 (v6.4.1 Kele 专属视觉交互版)
 # 特性：修复 Logo 截断问题，分离部署，全协议默认，全局 UI 重构
 # ==========================================
-# --- 扩展視覺與色彩引擎 ---
+
+# --- 扩展视觉与色彩引擎 ---
 RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'
 BG_RED='\033[41;37;1m'; BG_GREEN='\033[42;37;1m'; BG_BLUE='\033[44;37;1m'; BG_PURPLE='\033[45;37;1m'
 BOLD='\033[1m'; UNDERLINE='\033[4m'; NC='\033[0m'
 
-msg_info() { echo -e " ${CYAN}[ SYS.INFO ]${NC} $1"; }
-msg_success() { echo -e " ${GREEN}[ SYS.OK   ]${NC} $1"; }
-msg_warn() { echo -e " ${YELLOW}${BOLD}[ SYS.WARN ]${NC} $1"; }
-msg_error() { echo -e " ${RED}[ SYS.FAIL ]${NC} $1"; }
-reading() { echo -ne "\n ${CYAN}[ INPUT ] ${BOLD}$1${NC} > "; read -r "$2"; }
-divider() { echo -e "${CYAN} ||----------------------------------------------------------------||${NC}"; }
+msg_info() { echo -e " ${BG_BLUE} INFO ${NC} ${CYAN}$1${NC}"; }
+msg_success() { echo -e " ${BG_GREEN}  OK  ${NC} ${GREEN}$1${NC}"; }
+msg_warn() { echo -e " ${YELLOW}${BOLD}[⚠️ WARN]${NC} $1"; }
+msg_error() { echo -e " ${BG_RED} ERROR ${NC} ${RED}$1${NC}"; }
+reading() { echo -ne "\n ${CYAN}➤ ${BOLD}$1${NC} ➔ "; read -r "$2"; }
+divider() { echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"; }
 
 print_logo() {
     clear
-    echo -e "${CYAN} //================================================================\\\\ ${NC}"
-    echo -e "${CYAN} ||  [ S I N G - B O X   O P E R A T I O N   T E R M I N A L ]     || ${NC}"
-    echo -e "${CYAN} ||================================================================|| ${NC}"
-    echo -e "${CYAN} ||  ███████╗██╗███╗   ██╗ ██████╗       ██████╗  ██████╗ ██╗  ██╗ || ${NC}"
-    echo -e "${CYAN} ||  ██╔════╝██║████╗  ██║██╔════╝       ██╔══██╗██╔═══██╗╚██╗██╔╝ || ${NC}"
-    echo -e "${CYAN} ||  ███████╗██║██╔██╗ ██║██║  ███╗█████╗██████╔╝██║   ██║ ╚███╔╝  || ${NC}"
-    echo -e "${CYAN} ||  ╚════██║██║██║╚██╗██║██║   ██║╚════╝██╔══██╗██║   ██║ ██╔██╗  || ${NC}"
-    echo -e "${CYAN} ||  ███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗ || ${NC}"
-    echo -e "${CYAN} ||  ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ || ${NC}"
+    echo -e "${PURPLE}╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██╗███╗   ██╗ ██████╗       ██████╗  ██████╗ ██╗  ██╗${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}██╔════╝██║████╗  ██║██╔════╝       ██╔══██╗██╔═══██╗╚██╗██╔╝${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██║██╔██╗ ██║██║  ███╗█████╗██████╔╝██║   ██║ ╚███╔╝ ${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚════██║██║██║╚██╗██║██║   ██║╚════╝██╔══██╗██║   ██║ ██╔██╗ ${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}  ${PURPLE}┃${NC}"
     divider
-    echo -e "${CYAN} ||         ${PURPLE}${BOLD}[SYS.CORE] Kele's Advanced Architecture [v6.6]${NC}         ${CYAN}|| ${NC}"
-    echo -e "${CYAN} \\\\================================================================// ${NC}"
+    echo -e "${PURPLE}┃${NC}         ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.4) ✨${NC}          ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
 
