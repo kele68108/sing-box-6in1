@@ -131,6 +131,41 @@ get_outbound_ip() {
     echo "$ip"
 }
 
+# --- 获取归属地并生成国旗前缀 ---
+get_country_prefix() {
+    local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
+    [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
+    
+    case "$cc" in
+        "CN") echo "🇨🇳中国" ;;
+        "HK") echo "🇭🇰香港" ;;
+        "TW") echo "🇹🇼台湾" ;;
+        "MO") echo "🇲🇴澳门" ;;
+        "JP") echo "🇯🇵日本" ;;
+        "KR") echo "🇰🇷韩国" ;;
+        "SG") echo "🇸🇬新加坡" ;;
+        "US") echo "🇺🇸美国" ;;
+        "GB") echo "🇬🇧英国" ;;
+        "DE") echo "🇩🇪德国" ;;
+        "FR") echo "🇫🇷法国" ;;
+        "NL") echo "🇳🇱荷兰" ;;
+        "RU") echo "🇷🇺俄罗斯" ;;
+        "CA") echo "🇨🇦加拿大" ;;
+        "IN") echo "🇮🇳印度" ;;
+        "AU") echo "🇦🇺澳大利亚" ;;
+        "BR") echo "🇧🇷巴西" ;;
+        "MY") echo "🇲🇾马来西亚" ;;
+        "TH") echo "🇹🇭泰国" ;;
+        "VN") echo "🇻🇳越南" ;;
+        "PH") echo "🇵🇭菲律宾" ;;
+        "TR") echo "🇹🇷土耳其" ;;
+        "AR") echo "🇦🇷阿根廷" ;;
+        "ZA") echo "🇿🇦南非" ;;
+        "AE") echo "🇦🇪阿联酋" ;;
+        *) echo "🌍未知" ;;
+    esac
+}
+
 optimize_network() {
     cat > /etc/sysctl.d/99-singbox-optimize.conf << EOF
 net.ipv4.tcp_fastopen=3
@@ -584,8 +619,11 @@ show_nodes() {
     msg_info "正在探测公网 IP (请稍候)..."
     out_ip=$(get_outbound_ip)
     
+    msg_info "正在获取节点物理位置归属地..."
+    NODE_PREFIX=$(get_country_prefix)
+    
     if [ -z "$CUSTOM_IP" ]; then
-        echo -e " ${BG_BLUE} 网络探针 ${NC} 发现外网 IP: ${GREEN}$out_ip${NC}"
+        echo -e " ${BG_BLUE} 网络探针 ${NC} 发现外网 IP: ${GREEN}$out_ip${NC} (${NODE_PREFIX})"
         reading "若需指定入站IP/域名请在此输入 (一致请直接回车)" in_ip
         [ -n "$in_ip" ] && CUSTOM_IP=$in_ip || CUSTOM_IP=$out_ip
         save_config
@@ -599,20 +637,20 @@ show_nodes() {
     
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#SB-Reality"
+        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#SB-VLESS-NoTLS"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
-            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#SB-VLESS-TLS"
+            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
         else
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#SB-VLESS-FakeTLS"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -629,7 +667,7 @@ show_nodes() {
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
         if [ -n "$argo_domain" ]; then
-            link2="vless://${UUID}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo#SB-Argo"
+            link2="vless://${UUID}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo#${NODE_PREFIX}-ARGO"
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请检查日志)${NC}"; fi
     fi
@@ -637,20 +675,20 @@ show_nodes() {
     if [ "$ENABLE_HY" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com#SB-Hy2"
+        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://${UUID}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#SB-TUIC"
+        link4="tuic://${UUID}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🛡️  ${GREEN}[SOCKS5]${NC} (基础代理)"
         b64_cred=$(echo -n "${S5_U}:${S5_P}" | base64 | tr -d '\n')
-        link5="socks://${b64_cred}@${ip}:${PORT_S5}#SB-Socks5"
+        link5="socks://${b64_cred}@${ip}:${PORT_S5}#${NODE_PREFIX}-SOCKS5"
         echo -e "${CYAN}┃${NC}    ${link5}"; all_links+="$link5\n"
     fi
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
