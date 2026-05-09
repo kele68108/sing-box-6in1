@@ -29,7 +29,7 @@ print_logo() {
     echo -e "${CYAN} ||  ███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗ || ${NC}"
     echo -e "${CYAN} ||  ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ || ${NC}"
     divider
-    echo -e "${CYAN} ||         ${PURPLE}${BOLD}[SYS.CORE] Kele666's Advanced Architecture${NC}         ${CYAN}|| ${NC}"
+    echo -e "${CYAN} ||         ${PURPLE}${BOLD}[SYS.CORE] Kele's Advanced Architecture [v6.6]${NC}         ${CYAN}|| ${NC}"
     echo -e "${CYAN} \\\\================================================================// ${NC}"
     echo ""
 }
