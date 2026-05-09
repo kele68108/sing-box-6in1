@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 极致稳定架构版 (v6.1 NAT/Alpine/Reality 终极版)
-# 特性：防误删保护，极限网络 Buffer 调优，底层 IP 探测，新增 XTLS-Reality，支持单独停用协议
+# Sing-box 6-in-1 极致稳定架构版 (v6.2 NAT/Alpine/Reality 终极版)
+# 特性：防误删，极限 Buffer 调优，修复订阅公网IP探测，支持单独停用协议
 # ==========================================
 
 # --- 视觉与色彩引擎 ---
@@ -113,11 +113,14 @@ check_port_usage() {
     return 0
 }
 
-# 出口 IP 探测容错机制：优先读取底层路由，失败再走 API
+# 出口 IP 探测容错机制：必须获取真实公网 IP (多源 API 兜底)
 get_outbound_ip() {
-    local ip=$(ip -4 route get 8.8.8.8 2>/dev/null | grep -oP 'src \K\S+')
-    [ -z "$ip" ] && ip=$(curl -s4 --max-time 3 https://api.ipify.org)
-    [ -z "$ip" ] && ip=$(curl -s6 --max-time 3 ipv6.ip.sb)
+    local ip=""
+    ip=$(curl -s4 --max-time 3 https://api.ipify.org 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s4 --max-time 3 https://ifconfig.me/ip 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s4 --max-time 3 https://ip.gs 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s6 --max-time 3 https://api6.ipify.org 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s6 --max-time 3 ipv6.ip.sb 2>/dev/null)
     [ -z "$ip" ] && ip="127.0.0.1"
     echo "$ip"
 }
@@ -142,10 +145,10 @@ EOF
 
 install_deps() {
     msg_info "正在检查并安装基础依赖环境..."
-    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "iproute2")
+    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat")
     if is_alpine; then
         apk update >/dev/null 2>&1
-        apk add libc6-compat gcompat iproute2 >/dev/null 2>&1
+        apk add libc6-compat gcompat >/dev/null 2>&1
         for pkg in "${pkgs[@]}"; do
             if ! command -v "$pkg" >/dev/null 2>&1; then apk add "$pkg" >/dev/null 2>&1; fi
         done
@@ -545,7 +548,7 @@ show_nodes() {
     print_logo; [ ! -f "$SB_INFO" ] && msg_error "请先部署节点！" && sleep 1 && return
     load_config
     
-    msg_info "正在探测网络环境出口..."
+    msg_info "正在探测网络环境出口公网 IP..."
     out_ip=$(get_outbound_ip)
     
     if [ -z "$CUSTOM_IP" ]; then
@@ -657,7 +660,7 @@ main_menu() {
         echo -e "   系统状态: $status"
         echo -e "   ─────────────────────────────────────────"
         echo -e "   ${GREEN}[1]${NC} 🚀 选择性一键部署 / 重置引擎"
-        echo -e "   ${GREEN}[2]${NC} ⚙️  单独协议参数管理 (端口/密码/证书)"
+        echo -e "   ${GREEN}[2]${NC} ⚙️  单独协议参数管理 (端口/密码/证书/停用)"
         echo -e "   ${GREEN}[3]${NC} 🌐 调教 WARP 智能分流规则 (限非 Alpine)"
         echo -e "   ${GREEN}[4]${NC} 🔗 查看提取节点订阅链接"
         echo -e "   ─────────────────────────────────────────"
