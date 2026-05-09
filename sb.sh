@@ -529,7 +529,7 @@ manage_protocols() {
                 echo -e "\n  ${YELLOW}[ SYS.KILL ] 選擇需要從內存中移除的協議進程：${NC}"
                 [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
                 [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
-                [ "$ENABLE_HY" == "1" ] && echo "  [3] Hysteria 2"
+                [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
                 [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
                 [ "$ENABLE_S5" == "1" ] && echo "  [5] SOCKS5"
                 [ "$ENABLE_ARGO" == "1" ] && echo "  [6] Argo 隧道進程"
@@ -668,11 +668,11 @@ show_nodes() {
 }
 
 uninstall_script() {
-    print_logo; echo -e " ${RED}${BOLD}[ SYS.CRIT ] 系統危險操作警告！你正在執行物理超度程序！${NC}\n"
+    print_logo; echo -e " ${RED}${BOLD}[ SYS.CRIT ] 系統危險操作警告！你正在執行物理毀灭程序！${NC}\n"
     reading "是否授權執行？(將徹底清空腳本、內核引擎及配置) [y/n]" c
     [[ "$c" != "y" ]] && return
 
-    echo ""; for i in {3..1}; do echo -e "${YELLOW}[ SYS.WARN ] 距離系統屠宰還有 $i 秒...${NC}"; sleep 1; done
+    echo ""; for i in {3..1}; do echo -e "${YELLOW}[ SYS.WARN ] 距離系統清理還有 $i 秒...${NC}"; sleep 1; done
     
     msg_info "向守護進程發送 SIGKILL 中斷信號..."
     svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
@@ -706,7 +706,7 @@ main_menu() {
         echo -e "   ${CYAN}[4]${NC} [ NET  ] 調教 WARP 智能分流策略大腦 (Alpine 拒絕訪問)"
         echo -e "   ${CYAN}[5]${NC} [ DATA ] 查看提取節點訂閱鏈接及配置"
         echo -e "   ${CYAN}//------------------------------------------------------------\\\\${NC}"
-        echo -e "   ${RED}[9]${NC} [ KILL ] 徹底物理超度 (安全清理所有進程與殘留)"
+        echo -e "   ${RED}[9]${NC} [ KILL ] 徹底物理毀灭 (安全清理所有進程與殘留)"
         echo -e "   ${RED}[0]${NC} [ EXIT ] 斷開連接並安全退出終端"
         echo ""
         reading "請輸入操作指令代碼" choice
