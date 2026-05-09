@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 极致稳定架构版 (v6.4 Kele 专属视觉交互版)
-# 特性：分离部署，全协议默认，独立 Argo，全局 UI 重构，沉浸式交互
+# Sing-box 6-in-1 极致稳定架构版 (v6.4.1 Kele 专属视觉交互版)
+# 特性：修复 Logo 截断问题，分离部署，全协议默认，全局 UI 重构
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -15,20 +15,20 @@ msg_success() { echo -e " ${BG_GREEN}  OK  ${NC} ${GREEN}$1${NC}"; }
 msg_warn() { echo -e " ${YELLOW}${BOLD}[⚠️ WARN]${NC} $1"; }
 msg_error() { echo -e " ${BG_RED} ERROR ${NC} ${RED}$1${NC}"; }
 reading() { echo -ne "\n ${CYAN}➤ ${BOLD}$1${NC} ➔ "; read -r "$2"; }
-divider() { echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"; }
+divider() { echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"; }
 
 print_logo() {
     clear
-    echo -e "${PURPLE}╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██╗███╗   ██╗ ██████╗       ██████╗  ██████╗${NC}   ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}██╔════╝██║████╗  ██║██╔════╝       ██╔══██╗██╔═══██╗${NC}  ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██║██╔██╗ ██║██║  ███╗█████╗██████╔╝██║   ██║${NC}  ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}╚════██║██║██║╚██╗██║██║   ██║╚════╝██╔══██╗██║   ██║${NC}  ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝${NC}  ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}┃${NC}  ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝${NC}   ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██╗███╗   ██╗ ██████╗       ██████╗  ██████╗ ██╗  ██╗${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}██╔════╝██║████╗  ██║██╔════╝       ██╔══██╗██╔═══██╗╚██╗██╔╝${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██║██╔██╗ ██║██║  ███╗█████╗██████╔╝██║   ██║ ╚███╔╝ ${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚════██║██║██║╚██╗██║██║   ██║╚════╝██╔══██╗██║   ██║ ██╔██╗ ${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}  ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}     ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.4) ✨${NC}    ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
+    echo -e "${PURPLE}┃${NC}         ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.4) ✨${NC}          ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
 
@@ -525,7 +525,7 @@ manage_protocols() {
                 echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
                 [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
                 [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
-                [ "$ENABLE_HY" == "1" ] && echo "  [3] Hysteria 2"
+                [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
                 [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
                 [ "$ENABLE_S5" == "1" ] && echo "  [5] SOCKS5"
                 [ "$ENABLE_ARGO" == "1" ] && echo "  [6] Argo 隧道"
@@ -662,13 +662,13 @@ show_nodes() {
 }
 
 uninstall_script() {
-    print_logo; echo -e " ${BG_RED} 危险警告 ${NC} ${RED}你正在执行物理超度程序！${NC}\n"
+    print_logo; echo -e " ${BG_RED} 危险警告 ${NC} ${RED}你正在执行物理毁灭程序！${NC}\n"
     reading "确定要彻底卸载脚本、核心及配置吗？[y/n]" c
     [[ "$c" != "y" ]] && return
 
-    echo ""; for i in {3..1}; do echo -e "${YELLOW}将在 $i 秒后开始屠宰...${NC}"; sleep 1; done
+    echo ""; for i in {3..1}; do echo -e "${YELLOW}将在 $i 秒后开始清理...${NC}"; sleep 1; done
     
-    msg_info "正在屠宰后台进程与残留文件..."
+    msg_info "正在清理后台进程与残留文件..."
     svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
     svc_action disable sing-box >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
     
