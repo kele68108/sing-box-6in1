@@ -379,7 +379,7 @@ check_existing() {
 # --- 一鍵極速部署 ---
 install_fast() {
     print_logo
-    echo -e " ${CYAN}[ SYS.INIT ]${NC} ${YELLOW}開始執行全協議矩陣自動部署腳本...${NC}\n"
+    echo -e " ${CYAN}[ SYS.INIT ]${NC} ${YELLOW}開始執行全協議自動部署腳本...${NC}\n"
     check_existing || return
     
     install_deps; install_singbox; install_argo
@@ -411,7 +411,7 @@ install_fast() {
 
     msg_info "正在向內存注入架構配置並喚醒守護進程..."
     generate_config; setup_services
-    echo ""; msg_success "全矩陣部署完畢！6 大極速協議已進入穩定工作流。"
+    echo ""; msg_success "全協議部署完畢！"
     sleep 2
 }
 
@@ -428,7 +428,7 @@ install_custom() {
     PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
     
-    echo -e "${CYAN}[ SYS.CONF ]${NC} 路由協議開關矩陣 (NAT 環境建議按需開啓以節約端口)"
+    echo -e "${CYAN}[ SYS.CONF ]${NC} 路由協議開關 (NAT 環境建議按需開啓以節約端口)"
     reading "啓用 VLESS (WS) 模塊 [y/n] (默認 y)" c_vd; [ "${c_vd:-y}" == "y" ] && ENABLE_VD=1 || ENABLE_VD=0
     reading "啓用 VLESS (XTLS-Reality) 模塊 [y/n] (默認 y)" c_re; [ "${c_re:-y}" == "y" ] && ENABLE_RE=1 || ENABLE_RE=0
     reading "啓用 Hysteria 2 (UDP) 模塊 [y/n] (默認 y)" c_hy; [ "${c_hy:-y}" == "y" ] && ENABLE_HY=1 || ENABLE_HY=0
