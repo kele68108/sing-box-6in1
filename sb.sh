@@ -1,24 +1,34 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 极致稳定架构版 (v6.3 NAT/Alpine/Reality 终极版)
-# 特性：分离一键与按需部署，默认全协议开启，支持独立停用 Argo
+# Sing-box 6-in-1 极致稳定架构版 (v6.4 Kele 专属视觉交互版)
+# 特性：分离部署，全协议默认，独立 Argo，全局 UI 重构，沉浸式交互
 # ==========================================
 
-# --- 视觉与色彩引擎 ---
-RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'; NC='\033[0m'
+# --- 扩展视觉与色彩引擎 ---
+RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'
+BG_RED='\033[41;37;1m'; BG_GREEN='\033[42;37;1m'; BG_BLUE='\033[44;37;1m'; BG_PURPLE='\033[45;37;1m'
+BOLD='\033[1m'; UNDERLINE='\033[4m'; NC='\033[0m'
 
-msg_info() { echo -e "${CYAN}[ℹ️ INFO]${NC} $1"; }
-msg_success() { echo -e "${GREEN}[✅ OK]${NC} $1"; }
-msg_warn() { echo -e "${YELLOW}[⚠️ WARN]${NC} $1"; }
-msg_error() { echo -e "${RED}[❌ ERR]${NC} $1"; }
-reading() { echo -ne "${CYAN}➤ $1${NC}" >&2; read -r "$2"; }
+msg_info() { echo -e " ${BG_BLUE} INFO ${NC} ${CYAN}$1${NC}"; }
+msg_success() { echo -e " ${BG_GREEN}  OK  ${NC} ${GREEN}$1${NC}"; }
+msg_warn() { echo -e " ${YELLOW}${BOLD}[⚠️ WARN]${NC} $1"; }
+msg_error() { echo -e " ${BG_RED} ERROR ${NC} ${RED}$1${NC}"; }
+reading() { echo -ne "\n ${CYAN}➤ ${BOLD}$1${NC} ➔ "; read -r "$2"; }
+divider() { echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"; }
 
 print_logo() {
     clear
-    echo -e "${PURPLE}╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-    echo -e "${PURPLE}┃${NC}   🚀 ${CYAN}Sing-box 6-in-1 极致稳定引擎 ${YELLOW}(Reality版)${NC} ${PURPLE}┃${NC}"
-    echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
+    echo -e "${PURPLE}╭━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██╗███╗   ██╗ ██████╗       ██████╗  ██████╗${NC}   ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}██╔════╝██║████╗  ██║██╔════╝       ██╔══██╗██╔═══██╗${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████╗██║██╔██╗ ██║██║  ███╗█████╗██████╔╝██║   ██║${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚════██║██║██║╚██╗██║██║   ██║╚════╝██╔══██╗██║   ██║${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝${NC}  ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}  ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝${NC}   ${PURPLE}┃${NC}"
+    divider
+    echo -e "${PURPLE}┃${NC}     ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.4) ✨${NC}    ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
 
@@ -32,7 +42,6 @@ ARGO_LOG="${SB_DIR}/argo.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
-# --- 强制覆盖修复快捷指令 ---
 if [[ "$0" != "/usr/bin/sb" ]]; then
     rm -f /usr/bin/sb 2>/dev/null
     cp -f "$0" /usr/bin/sb
@@ -41,7 +50,6 @@ if [[ "$0" != "/usr/bin/sb" ]]; then
     sleep 1
 fi
 
-# --- 核心数据读写 ---
 load_config() { 
     [ -f "$SB_INFO" ] && source "$SB_INFO"
     [ -z "$VD_MODE" ] && VD_MODE="2"
@@ -87,12 +95,10 @@ ENABLE_ARGO=$ENABLE_ARGO
 EOF
 }
 
-# --- 基础工具与跨平台适配 ---
 is_alpine() { [ -f /etc/alpine-release ]; }
 
 svc_action() {
-    local action=$1
-    local service=$2
+    local action=$1; local service=$2
     if is_alpine; then
         case $action in
             enable) rc-update add $service default >/dev/null 2>&1 ;;
@@ -144,28 +150,23 @@ EOF
 }
 
 install_deps() {
-    msg_info "正在检查并安装基础依赖环境..."
+    echo ""; msg_info "正在检查并安装基础依赖环境..."
     local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat")
     if is_alpine; then
-        apk update >/dev/null 2>&1
-        apk add libc6-compat gcompat >/dev/null 2>&1
-        for pkg in "${pkgs[@]}"; do
-            if ! command -v "$pkg" >/dev/null 2>&1; then apk add "$pkg" >/dev/null 2>&1; fi
-        done
+        apk update >/dev/null 2>&1; apk add libc6-compat gcompat >/dev/null 2>&1
+        for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apk add "$pkg" >/dev/null 2>&1; done
     else
         apt-get update -y >/dev/null 2>&1 || yum makecache -y >/dev/null 2>&1
-        for pkg in "${pkgs[@]}"; do
-            if ! command -v "$pkg" >/dev/null 2>&1; then apt-get install -y "$pkg" >/dev/null 2>&1 || yum install -y "$pkg" >/dev/null 2>&1; fi
-        done
+        for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && (apt-get install -y "$pkg" >/dev/null 2>&1 || yum install -y "$pkg" >/dev/null 2>&1); done
     fi
     optimize_network
 }
 
 safe_download() {
     local url=$1; local dest=$2
-    msg_info "正在获取: $url"
+    msg_info "正在拉取核心组件: $(basename $dest)..."
     local http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
-    if [ "$http_code" != "200" ]; then msg_error "文件拉取失败！(HTTP 状态码: $http_code)"; rm -f "$dest"; return 1; fi
+    if [ "$http_code" != "200" ]; then msg_error "文件拉取失败！(HTTP: $http_code)"; rm -f "$dest"; return 1; fi
     if [ ! -s "$dest" ]; then msg_error "下载失败！文件为空。"; rm -f "$dest"; return 1; fi
     return 0
 }
@@ -175,25 +176,22 @@ apply_cert() {
     if [ ! -d ~/.acme.sh ]; then msg_warn "正在安装 acme.sh 证书工具..."; curl https://get.acme.sh | sh >/dev/null 2>&1; fi
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
     
-    echo ""; msg_info "================ 证书申请 ================"
-    msg_info "开始为 $domain 申请 TLS 证书"
-    
+    echo -e "\n${BG_BLUE} 证书申请 ${NC} 开始为 ${YELLOW}$domain${NC} 申请 TLS 证书..."
     local standalone_success=false
     if check_port_usage 80; then
         ~/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256 --force
         if [ $? -eq 0 ]; then standalone_success=true; fi
-    else msg_warn "检测到 80 端口被占用或无法穿透，跳过 Standalone 模式。"; fi
+    else msg_warn "80 端口被占用或不可达，跳过 Standalone 模式。"; fi
     
     if [ "$standalone_success" = false ]; then
-        echo ""; msg_error "Standalone 模式申请失败。"
-        msg_info ">>> 触发第二阶段：Cloudflare API (DNS-01) 模式 (无需 80 端口)"
-        reading "是否启用 Cloudflare API 继续申请证书？(y/n，默认 y): " use_dns
+        msg_error "Standalone 模式失败，切换至 API 验证模式。"
+        reading "是否启用 Cloudflare API 继续申请？[y/n]" use_dns
         [ "${use_dns:-y}" != "y" ] && { msg_error "已取消证书申请。"; return 1; }
         
-        reading "1. 请输入 Cloudflare API Token: " cf_token; export CF_Token="$cf_token"
-        reading "2. 请输入域名的 区域 ID (Zone ID): " cf_zone_id; export CF_Zone_ID="$cf_zone_id"
+        reading "请输入 Cloudflare API Token" cf_token; export CF_Token="$cf_token"
+        reading "请输入域名的 Zone ID" cf_zone_id; export CF_Zone_ID="$cf_zone_id"
         
-        msg_info "正在通过 API 申请证书，这可能需要 1-2 分钟..."
+        msg_info "API 申请中，请耐心等待 1-2 分钟..."
         ~/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --force
         [ $? -ne 0 ] && { msg_error "证书申请彻底失败！"; return 1; }
     fi
@@ -206,7 +204,6 @@ apply_cert() {
 
 install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
-        msg_info "正在部署 Sing-box 核心大脑..."
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
         TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name)
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
@@ -219,7 +216,6 @@ install_singbox() {
 
 install_argo() {
     if [ ! -f "$ARGO_BIN" ]; then
-        msg_info "正在部署 Cloudflared (Argo) 隧道组件..."
         ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; esac
         if safe_download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${A_ARCH}" "$ARGO_BIN"; then
             chmod +x "$ARGO_BIN"
@@ -236,10 +232,8 @@ install_warp() {
         echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
         apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
     fi
-    warp-cli --accept-tos registration new >/dev/null 2>&1
-    warp-cli --accept-tos mode proxy >/dev/null 2>&1
-    warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1
-    warp-cli --accept-tos connect >/dev/null 2>&1
+    warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
+    warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
 }
 
 generate_config() {
@@ -373,7 +367,7 @@ EOF
 check_existing() {
     if [ -f "$SB_INFO" ]; then
         msg_warn "检测到系统已部署过节点！"
-        reading "是否确定要清除旧配置并重新安装？(y/n): " confirm
+        reading "是否确定要清除旧配置并重新安装？[y/n]" confirm
         [[ "$confirm" != "y" ]] && return 1
         find "$SB_DIR" -type f ! -name "sub.txt" ! -name "server.crt" ! -name "server.key" -delete 2>/dev/null
     fi
@@ -383,7 +377,7 @@ check_existing() {
 # --- 一键极速部署 ---
 install_fast() {
     print_logo
-    echo -e "${YELLOW}▶ 开始一键快速部署流程 (全自动/全协议)...${NC}\n"
+    echo -e "${BG_PURPLE} 一键极速部署 ${NC} ${YELLOW}准备拉起全协议矩阵...${NC}\n"
     check_existing || return
     
     install_deps; install_singbox; install_argo
@@ -395,14 +389,14 @@ install_fast() {
     
     ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
     
-    msg_info "正在自动分配可用端口..."
+    msg_info "正在自动分配系统可用端口..."
     while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
     while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done
     while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done
     while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done
     while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done
     
-    msg_info "正在生成 Reality 密钥对..."
+    msg_info "正在生成 Reality 专属密钥对..."
     local keys=$($SB_BIN generate reality-keypair)
     REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
     REALITY_PBK=$(echo "$keys" | awk '/PublicKey/ {print $2}')
@@ -413,18 +407,16 @@ install_fast() {
     WARP_MODE="1"; WARP_DOMAINS=""
     VD_MODE="2"; VD_DOMAIN=""
 
-    echo ""
-    msg_info "正在生成底层架构配置并拉起系统服务..."
+    msg_info "正在写入底层架构并拉起守护进程..."
     generate_config; setup_services
-    echo ""
-    msg_success "一键快速部署大功告成！6 大全协议已在后台稳定运行。"
+    echo ""; msg_success "一键部署圆满完成！6 大极速协议已在后台稳稳运行。"
     sleep 2
 }
 
 # --- 自定义按需部署 ---
 install_custom() {
     print_logo
-    echo -e "${YELLOW}▶ 开始自定义按需部署流程...${NC}\n"
+    echo -e "${BG_PURPLE} 自定义部署 ${NC} ${YELLOW}进入架构师调优模式...${NC}\n"
     check_existing || return
     
     install_deps; install_singbox; install_argo
@@ -434,21 +426,21 @@ install_custom() {
     PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
     
-    echo -e "\n${CYAN}╭━━━ ⚙️ 核心协议按需选择 (NAT 节省端口) ━━━╮${NC}"
-    reading "➤ 启用 VLESS (WS) [y/n] (默认 y): " c_vd; [ "${c_vd:-y}" == "y" ] && ENABLE_VD=1 || ENABLE_VD=0
-    reading "➤ 启用 VLESS (XTLS-Reality) [y/n] (默认 y): " c_re; [ "${c_re:-y}" == "y" ] && ENABLE_RE=1 || ENABLE_RE=0
-    reading "➤ 启用 Hysteria 2 (UDP) [y/n] (默认 y): " c_hy; [ "${c_hy:-y}" == "y" ] && ENABLE_HY=1 || ENABLE_HY=0
-    reading "➤ 启用 TUIC v5 (UDP) [y/n] (默认 y): " c_tc; [ "${c_tc:-y}" == "y" ] && ENABLE_TC=1 || ENABLE_TC=0
-    reading "➤ 启用 SOCKS5 [y/n] (默认 y): " c_s5; [ "${c_s5:-y}" == "y" ] && ENABLE_S5=1 || ENABLE_S5=0
-    reading "➤ 启用 Argo 隧道 [y/n] (默认 y): " c_ar; [ "${c_ar:-y}" == "y" ] && ENABLE_ARGO=1 || ENABLE_ARGO=0
-    echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}\n"
+    echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议按需开启，节省端口)"
+    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd; [ "${c_vd:-y}" == "y" ] && ENABLE_VD=1 || ENABLE_VD=0
+    reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re; [ "${c_re:-y}" == "y" ] && ENABLE_RE=1 || ENABLE_RE=0
+    reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy; [ "${c_hy:-y}" == "y" ] && ENABLE_HY=1 || ENABLE_HY=0
+    reading "启用 TUIC v5 (UDP) [y/n] (默认 y)" c_tc; [ "${c_tc:-y}" == "y" ] && ENABLE_TC=1 || ENABLE_TC=0
+    reading "启用 SOCKS5 [y/n] (默认 y)" c_s5; [ "${c_s5:-y}" == "y" ] && ENABLE_S5=1 || ENABLE_S5=0
+    reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar; [ "${c_ar:-y}" == "y" ] && ENABLE_ARGO=1 || ENABLE_ARGO=0
 
+    echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
-        reading "➤ 请输入 VLESS (WS) 外网端口 (回车随机): " PORT_VD
+        reading "VLESS (WS) 外网端口 (回车随机)" PORT_VD
         [ -z "$PORT_VD" ] && while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
     fi
     if [ "$ENABLE_RE" == "1" ]; then
-        reading "➤ 请输入 Reality 外网端口 (建议能穿透的443，回车随机): " PORT_RE
+        reading "Reality 外网端口 (建议443，回车随机)" PORT_RE
         [ -z "$PORT_RE" ] && while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done
         msg_info "正在生成 Reality 密钥对..."
         local keys=$($SB_BIN generate reality-keypair)
@@ -458,15 +450,15 @@ install_custom() {
         REALITY_SNI="www.microsoft.com"
     fi
     if [ "$ENABLE_HY" == "1" ]; then
-        reading "➤ 请输入 Hysteria2 外网端口 (回车随机): " PORT_HY
+        reading "Hysteria2 外网端口 (回车随机)" PORT_HY
         [ -z "$PORT_HY" ] && while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done
     fi
     if [ "$ENABLE_TC" == "1" ]; then
-        reading "➤ 请输入 TUIC 外网端口 (回车随机): " PORT_TC
+        reading "TUIC 外网端口 (回车随机)" PORT_TC
         [ -z "$PORT_TC" ] && while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done
     fi
     if [ "$ENABLE_S5" == "1" ]; then
-        reading "➤ 请输入 SOCKS5 外网端口 (回车随机): " PORT_S5
+        reading "SOCKS5 外网端口 (回车随机)" PORT_S5
         [ -z "$PORT_S5" ] && while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done
     fi
     
@@ -474,11 +466,9 @@ install_custom() {
     WARP_MODE="1"; WARP_DOMAINS=""
     VD_MODE="2"; VD_DOMAIN=""
 
-    echo ""
-    msg_info "正在生成底层架构配置并拉起系统服务..."
+    echo ""; msg_info "正在写入底层架构并拉起守护进程..."
     generate_config; setup_services
-    echo ""
-    msg_success "自定义部署大功告成！协议已在后台稳定运行。"
+    echo ""; msg_success "自定义部署圆满完成！"
     sleep 2
 }
 
@@ -487,55 +477,52 @@ manage_protocols() {
     load_config
     while true; do
         print_logo
-        echo -e "${CYAN}╭━━━ ⚙️ 已开启协议参数管理 ━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && echo -e "${CYAN}┃${NC}  [1] ⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
-        [ "$ENABLE_RE" == "1" ] && echo -e "${CYAN}┃${NC}  [2] 🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
-        [ "$ENABLE_HY" == "1" ] && echo -e "${CYAN}┃${NC}  [3] 🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
-        [ "$ENABLE_TC" == "1" ] && echo -e "${CYAN}┃${NC}  [4] 🏎️  修改 TUIC v5     ${YELLOW}(端口: $PORT_TC)${NC}"
-        [ "$ENABLE_S5" == "1" ] && echo -e "${CYAN}┃${NC}  [5] 🛡️  修改 SOCKS5      ${YELLOW}(端口: $PORT_S5)${NC}"
-        [ "$ENABLE_ARGO" == "1" ] && echo -e "${CYAN}┃${NC}  [6] ☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
-        echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        echo -e "${CYAN}┃${NC}  [7] 🛑 停用/卸载单独协议"
-        echo -e "${CYAN}┃${NC}  [0] ↩️  返回主菜单"
-        echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
-        reading "请选择操作 [0-7]: " choice
+        echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
+        [ "$ENABLE_VD" == "1" ] && echo -e "${PURPLE}┃${NC}  [1] ⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
+        [ "$ENABLE_RE" == "1" ] && echo -e "${PURPLE}┃${NC}  [2] 🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
+        [ "$ENABLE_HY" == "1" ] && echo -e "${PURPLE}┃${NC}  [3] 🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
+        [ "$ENABLE_TC" == "1" ] && echo -e "${PURPLE}┃${NC}  [4] 🏎️  修改 TUIC v5     ${YELLOW}(端口: $PORT_TC)${NC}"
+        [ "$ENABLE_S5" == "1" ] && echo -e "${PURPLE}┃${NC}  [5] 🛡️  修改 SOCKS5      ${YELLOW}(端口: $PORT_S5)${NC}"
+        [ "$ENABLE_ARGO" == "1" ] && echo -e "${PURPLE}┃${NC}  [6] ☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
+        echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        echo -e "${PURPLE}┃${NC}  ${RED}[7] 🛑 停用/卸载单独协议${NC}"
+        echo -e "${PURPLE}┃${NC}  [0] ↩️  返回主菜单"
+        echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
+        reading "请选择操作 [0-7]" choice
         case $choice in
             1) 
                 [ "$ENABLE_VD" != "1" ] && continue
-                reading "➤ 新 VLESS 端口 (回车不变): " p; [ -n "$p" ] && PORT_VD=$p
-                reading "➤ 新 UUID (回车不变): " u; [ -n "$u" ] && UUID=$u
+                reading "新 VLESS 端口 (回车不变)" p; [ -n "$p" ] && PORT_VD=$p
+                reading "新 UUID (回车不变)" u; [ -n "$u" ] && UUID=$u
                 echo -e "\n  ${YELLOW}请选择 VLESS 模式：${NC}"
                 echo -e "  [1] 关闭 TLS (纯普通直连)"
                 echo -e "  [2] 开启 TLS (自签伪装证书)"
                 echo -e "  [3] 开启 TLS (申请真实域名证书)"
-                reading "➤ 模式选择 [1-3]: " vm
+                reading "模式选择 [1-3]" vm
                 if [ "$vm" == "3" ]; then
-                    reading "➤ 请输入已解析到此VPS的真实域名: " vd
-                    if [ -n "$vd" ]; then
-                        apply_cert "$vd"
-                        if [ $? -eq 0 ]; then VD_MODE="3"; VD_DOMAIN="$vd"; else msg_error "证书获取失败，放弃修改模式。"; fi
-                    else msg_warn "域名为空，操作取消。"; fi
+                    reading "请输入已解析到此VPS的真实域名" vd
+                    if [ -n "$vd" ]; then apply_cert "$vd"; if [ $? -eq 0 ]; then VD_MODE="3"; VD_DOMAIN="$vd"; else msg_error "获取失败，放弃修改。"; fi; else msg_warn "操作取消。"; fi
                 elif [[ "$vm" == "1" || "$vm" == "2" ]]; then VD_MODE=$vm; VD_DOMAIN=""; fi
                 ;;
             2)
                 [ "$ENABLE_RE" != "1" ] && continue
-                reading "➤ 新 Reality 端口 (回车不变): " p; [ -n "$p" ] && PORT_RE=$p
-                reading "➤ 伪装 SNI 域名 (回车不变, 当前: $REALITY_SNI): " s; [ -n "$s" ] && REALITY_SNI=$s
+                reading "新 Reality 端口 (回车不变)" p; [ -n "$p" ] && PORT_RE=$p
+                reading "伪装 SNI 域名 (当前: $REALITY_SNI)" s; [ -n "$s" ] && REALITY_SNI=$s
                 ;;
-            3) [ "$ENABLE_HY" != "1" ] && continue; reading "➤ 新 Hy2 端口 (回车不变): " p; [ -n "$p" ] && PORT_HY=$p; reading "➤ 新密码 (回车不变): " pw; [ -n "$pw" ] && PW_HY=$pw ;;
-            4) [ "$ENABLE_TC" != "1" ] && continue; reading "➤ 新 TUIC 端口 (回车不变): " p; [ -n "$p" ] && PORT_TC=$p; reading "➤ 新密码 (回车不变): " pw; [ -n "$pw" ] && PW_TC=$pw ;;
-            5) [ "$ENABLE_S5" != "1" ] && continue; reading "➤ 新 Socks5 端口 (回车不变): " p; [ -n "$p" ] && PORT_S5=$p; reading "➤ 新密码 (回车不变): " pw; [ -n "$pw" ] && S5_P=$pw ;;
+            3) [ "$ENABLE_HY" != "1" ] && continue; reading "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw ;;
+            4) [ "$ENABLE_TC" != "1" ] && continue; reading "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw ;;
+            5) [ "$ENABLE_S5" != "1" ] && continue; reading "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw ;;
             6)
                 [ "$ENABLE_ARGO" != "1" ] && continue
-                reading "➤ [1]=临时隧道(随机域名)  [2]=固定隧道: " am
+                reading "[1]=临时隧道(随机域名)  [2]=固定隧道" am
                 if [ "$am" == "2" ]; then
                     ARGO_MODE="fixed"
-                    while true; do reading "➤ 请输入绑定的固定域名: " d; if [ -n "$d" ]; then ARGO_DOMAIN=$d; break; else msg_error "域名不能为空！"; fi; done
-                    while true; do reading "➤ 请输入 Cloudflare Token: " t; if [ ${#t} -gt 50 ]; then ARGO_TOKEN=$t; break; else msg_error "Token 过短，请检查复制是否完整！"; fi; done
+                    while true; do reading "请输入绑定的固定域名" d; if [ -n "$d" ]; then ARGO_DOMAIN=$d; break; else msg_error "域名不能为空！"; fi; done
+                    while true; do reading "请输入 Cloudflare Token" t; if [ ${#t} -gt 50 ]; then ARGO_TOKEN=$t; break; else msg_error "Token 过短！"; fi; done
                 else ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""; fi
                 ;;
             7)
-                echo -e "\n  ${YELLOW}请选择要停用/卸载的协议：${NC}"
+                echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
                 [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
                 [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
                 [ "$ENABLE_HY" == "1" ] && echo "  [3] Hysteria 2"
@@ -543,24 +530,18 @@ manage_protocols() {
                 [ "$ENABLE_S5" == "1" ] && echo "  [5] SOCKS5"
                 [ "$ENABLE_ARGO" == "1" ] && echo "  [6] Argo 隧道"
                 echo "  [0] 取消"
-                reading "➤ 选择停用目标 [0-6]: " disable_choice
+                reading "选择停用目标 [0-6]" disable_choice
                 case $disable_choice in
-                    1) ENABLE_VD=0 ;;
-                    2) ENABLE_RE=0 ;;
-                    3) ENABLE_HY=0 ;;
-                    4) ENABLE_TC=0 ;;
-                    5) ENABLE_S5=0 ;;
-                    6) ENABLE_ARGO=0 ;;
-                    0) continue ;;
-                    *) msg_warn "无效输入"; sleep 1; continue ;;
+                    1) ENABLE_VD=0 ;; 2) ENABLE_RE=0 ;; 3) ENABLE_HY=0 ;; 4) ENABLE_TC=0 ;; 5) ENABLE_S5=0 ;; 6) ENABLE_ARGO=0 ;; 0) continue ;; *) msg_warn "无效输入"; sleep 1; continue ;;
                 esac
                 msg_success "目标协议已标记为停用！"
                 ;;
             0) break ;;
             *) continue ;;
         esac
+        msg_info "正在热重载内核配置..."
         generate_config; setup_services
-        msg_success "配置已更新并实现热重载！"; sleep 1
+        msg_success "配置热重载完成！"; sleep 1
     done
 }
 
@@ -574,26 +555,26 @@ manage_warp() {
         [ "$WARP_MODE" == "2" ] && mode_str="全局 WARP"
         [ "$WARP_MODE" == "3" ] && mode_str="路由分流"
         
-        echo -e "${PURPLE}╭━━━ 🌐 WARP 智能分流大脑 ━━━━━━━━━━╮${NC}"
+        echo -e "${PURPLE}╭━━━ 🌐 ${BG_BLUE} WARP 智能大脑 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         echo -e "${PURPLE}┃${NC} 当前模式: ${GREEN}$mode_str${NC}"
         [ "$WARP_MODE" == "3" ] && echo -e "${PURPLE}┃${NC} 分流名单: ${YELLOW}${WARP_DOMAINS:-无}${NC}"
-        echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${PURPLE}┃${NC}  [1] 🔄 切换 WARP 工作模式"
         echo -e "${PURPLE}┃${NC}  [2] ➕ 追加目标分流域名"
         echo -e "${PURPLE}┃${NC}  [3] ➖ 移除指定分流域名"
         echo -e "${PURPLE}┃${NC}  [4] 🗑️  清空所有分流名单"
         echo -e "${PURPLE}┃${NC}  [0] ↩️  返回主菜单"
-        echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
+        echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
         
-        reading "请选择操作 [0-4]: " choice
+        reading "请选择操作 [0-4]" choice
         case $choice in
-            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "➤ 选择模式: " wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
-            2) reading "➤ 输入要追加的域名 (如 netflix.com): " nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
-            3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "当前没有可删除的域名！"; sleep 1; continue; fi; reading "➤ 输入要移除的域名: " rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "分流名单已更新！"; fi ;;
+            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
+            2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
+            3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
             4) WARP_DOMAINS="" ;;
             0) break ;;
         esac
-        generate_config; svc_action restart sing-box; msg_success "WARP 路由规则已热更新！"; sleep 1
+        generate_config; svc_action restart sing-box; msg_success "WARP 规则已热生效！"; sleep 1
     done
 }
 
@@ -601,12 +582,12 @@ show_nodes() {
     print_logo; [ ! -f "$SB_INFO" ] && msg_error "请先部署节点！" && sleep 1 && return
     load_config
     
-    msg_info "正在探测网络环境出口公网 IP..."
+    msg_info "正在探测公网 IP (请稍候)..."
     out_ip=$(get_outbound_ip)
     
     if [ -z "$CUSTOM_IP" ]; then
-        echo -e "${YELLOW}检测出站IP为: ${GREEN}$out_ip${NC}"
-        reading "➤ 若需指定入站IP/域名请在此输入 (一致请直接回车): " in_ip
+        echo -e " ${BG_BLUE} 网络探针 ${NC} 发现外网 IP: ${GREEN}$out_ip${NC}"
+        reading "若需指定入站IP/域名请在此输入 (一致请直接回车)" in_ip
         [ -n "$in_ip" ] && CUSTOM_IP=$in_ip || CUSTOM_IP=$out_ip
         save_config
     fi
@@ -614,7 +595,7 @@ show_nodes() {
     local ip=$CUSTOM_IP
     [[ "$ip" =~ .*:.* ]] && ip="[${ip}]" 
 
-    echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点信息汇总 ━━━━━━━━━━━━╮${NC}"
+    echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
     
     if [ "$ENABLE_RE" == "1" ]; then
@@ -675,54 +656,53 @@ show_nodes() {
     fi
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
-    echo -e "\n${YELLOW}📦 Base64 通用订阅码 (请一键复制以下内容):${NC}"
+    echo -e "\n ${BG_BLUE} Base64 订阅 ${NC} 一键复制以下内容导入客户端:"
     echo -e "$all_links" | sed '/^$/d' | base64 | tr -d '\n'
-    echo -e "\n"; reading "按回车键 (Enter) 返回主菜单..." dummy
+    reading "按回车键 (Enter) 返回主菜单..." dummy
 }
 
 uninstall_script() {
-    print_logo; msg_error "!!! 危险操作: 准备物理超度所有服务 !!!"
-    reading "➤ 确定要卸载本脚本、核心引擎及配置吗? (y/n): " c
+    print_logo; echo -e " ${BG_RED} 危险警告 ${NC} ${RED}你正在执行物理超度程序！${NC}\n"
+    reading "确定要彻底卸载脚本、核心及配置吗？[y/n]" c
     [[ "$c" != "y" ]] && return
 
+    echo ""; for i in {3..1}; do echo -e "${YELLOW}将在 $i 秒后开始屠宰...${NC}"; sleep 1; done
+    
     msg_info "正在屠宰后台进程与残留文件..."
-    svc_action stop sing-box >/dev/null 2>&1
-    svc_action stop sb-argo >/dev/null 2>&1
-    svc_action disable sing-box >/dev/null 2>&1
-    svc_action disable sb-argo >/dev/null 2>&1
+    svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
+    svc_action disable sing-box >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
     
     if is_alpine; then
         rm -f /etc/init.d/sing-box /etc/init.d/sb-argo
     else
-        rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service
-        systemctl daemon-reload
+        rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service; systemctl daemon-reload
     fi
     
     if command -v warp-cli >/dev/null 2>&1; then warp-cli disconnect >/dev/null 2>&1; apt-get remove -y cloudflare-warp >/dev/null 2>&1; fi
 
     find "$SB_DIR" -type f ! -name "sub.txt" -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
-    msg_success "系统已恢复纯净状态（自定义文本已保留）。江湖再见！"; rm -f "$0"; exit 0
+    msg_success "系统已恢复纯净状态 (自定义文本已保留)。江湖再见！"; rm -f "$0"; exit 0
 }
 
 main_menu() {
     while true; do
         print_logo
-        local status="${RED}未安装 (休眠中)${NC}"
-        [ -f "$SB_INFO" ] && status="${GREEN}已安装 (运行中)${NC}"
+        local status="${BG_RED} 休眠中 (未安装) ${NC}"
+        [ -f "$SB_INFO" ] && status="${BG_GREEN} 运行中 (已部署) ${NC}"
         
         echo -e "   系统状态: $status"
-        echo -e "   ─────────────────────────────────────────"
+        echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         echo -e "   ${GREEN}[1]${NC} 🚀 一键快速部署 / 重置引擎"
-        echo -e "   ${GREEN}[2]${NC} 🚀 自定义按需部署 / 重置引擎"
+        echo -e "   ${GREEN}[2]${NC} 🛠️  自定义按需部署 / 重置引擎"
         echo -e "   ${GREEN}[3]${NC} ⚙️  单独协议参数管理 (端口/密码/证书/停用)"
         echo -e "   ${GREEN}[4]${NC} 🌐 调教 WARP 智能分流规则 (Alpine不可用)"
         echo -e "   ${GREEN}[5]${NC} 🔗 查看提取节点订阅链接"
-        echo -e "   ─────────────────────────────────────────"
-        echo -e "   ${RED}[9]${NC} 🗑️  彻底卸载 (卸载脚本与服务)"
+        echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
+        echo -e "   ${RED}[9]${NC} 🗑️  彻底卸载 (安全清理服务与残留)"
         echo -e "   ${RED}[0]${NC} 🚪 安全退出面板"
         echo ""
-        reading "请输入指令代码: " choice
+        reading "请输入指令代码" choice
         case $choice in
             1) install_fast ;;
             2) install_custom ;;
