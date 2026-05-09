@@ -27,7 +27,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD} Kele's Sing-box 6-in-1 主流稳定协议 (v6.6) ${NC}           ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.4) ✨${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
