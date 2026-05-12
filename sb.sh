@@ -822,7 +822,7 @@ main_menu() {
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf "   ${RED}[9]${NC}\t🗑️  彻底卸载 (安全清理服务与残留)\n"
+        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载 (安全清理服务与残留)\n"
         printf "   ${RED}[0]${NC}\t🚪 安全退出面板\n"
         echo ""
         reading "请输入指令代码" choice
