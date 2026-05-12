@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 (修复版)
+# Sing-box 6-in-1 
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.7) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -103,7 +103,6 @@ svc_action() {
             enable) rc-update add $service default >/dev/null 2>&1 ;;
             disable) rc-update del $service default >/dev/null 2>&1 ;;
             start|stop|restart) rc-service $service $action >/dev/null 2>&1 ;;
-            reload) ;;
         esac
     else
         case $action in
@@ -117,32 +116,17 @@ svc_action() {
 
 check_port_usage() {
     local port=$1; [ -z "$port" ] && return 0
-    if command -v lsof >/dev/null 2>&1; then
-        lsof -i :$port >/dev/null 2>&1 && return 1
-    fi
-    if command -v ss >/dev/null 2>&1; then
-        ss -tuln | grep -q ":$port " && return 1
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -tuln | grep -q ":$port " && return 1
-    fi
+    if lsof -i :$port >/dev/null 2>&1 || netstat -tuln | grep -q ":$port "; then return 1; fi
     return 0
 }
 
 get_outbound_ip() {
     local ip=""
-    for i in 1 2 3; do
-        ip=$(curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null)
-        [ -n "$ip" ] && break
-        ip=$(curl -s4 --max-time 5 https://ifconfig.me/ip 2>/dev/null)
-        [ -n "$ip" ] && break
-        ip=$(curl -s4 --max-time 5 https://ip.gs 2>/dev/null)
-        [ -n "$ip" ] && break
-        ip=$(curl -s6 --max-time 5 https://api6.ipify.org 2>/dev/null)
-        [ -n "$ip" ] && break
-        ip=$(curl -s6 --max-time 5 ipv6.ip.sb 2>/dev/null)
-        [ -n "$ip" ] && break
-        sleep 1
-    done
+    ip=$(curl -s4 --max-time 3 https://api.ipify.org 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s4 --max-time 3 https://ifconfig.me/ip 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s4 --max-time 3 https://ip.gs 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s6 --max-time 3 https://api6.ipify.org 2>/dev/null)
+    [ -z "$ip" ] && ip=$(curl -s6 --max-time 3 ipv6.ip.sb 2>/dev/null)
     [ -z "$ip" ] && ip="127.0.0.1"
     echo "$ip"
 }
@@ -201,21 +185,13 @@ EOF
 
 install_deps() {
     echo ""; msg_info "正在检查并安装基础依赖环境..."
-    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps")
+    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat")
     if is_alpine; then
         apk update >/dev/null 2>&1; apk add libc6-compat gcompat >/dev/null 2>&1
         for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apk add "$pkg" >/dev/null 2>&1; done
     else
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -y >/dev/null 2>&1
-            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
-        elif command -v yum >/dev/null 2>&1; then
-            yum makecache -y >/dev/null 2>&1
-            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y epel-release "$pkg" >/dev/null 2>&1; done
-        else
-            msg_error "不支持的包管理器，请手动安装依赖：${pkgs[*]}"
-            exit 1
-        fi
+        apt-get update -y >/dev/null 2>&1 || yum makecache -y >/dev/null 2>&1
+        for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && (apt-get install -y "$pkg" >/dev/null 2>&1 || yum install -y "$pkg" >/dev/null 2>&1); done
     fi
     optimize_network
 }
@@ -231,7 +207,7 @@ safe_download() {
 
 apply_cert() {
     local domain=$1
-    if [ ! -d ~/.acme.sh ]; then msg_warn "正在安装 acme.sh 证书工具..."; curl -fsSL https://get.acme.sh | sh >/dev/null 2>&1; fi
+    if [ ! -d ~/.acme.sh ]; then msg_warn "正在安装 acme.sh 证书工具..."; curl https://get.acme.sh | sh >/dev/null 2>&1; fi
     ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt >/dev/null 2>&1
     
     echo -e "\n${BG_BLUE} 证书申请 ${NC} 开始为 ${YELLOW}$domain${NC} 申请 TLS 证书..."
@@ -244,7 +220,10 @@ apply_cert() {
     if [ "$standalone_success" = false ]; then
         msg_error "Standalone 模式失败，切换至 API 验证模式。"
         reading "是否启用 Cloudflare API 继续申请？[y/n]" use_dns
-        [ "${use_dns:-y}" != "y" ] && { msg_error "已取消证书申请。"; return 1; }
+        # 不区分大小写比较
+        if [[ "${use_dns,,:-y}" != "y" ]]; then
+            msg_error "已取消证书申请。"; return 1
+        fi
         
         reading "请输入 Cloudflare API Token" cf_token; export CF_Token="$cf_token"
         reading "请输入域名的 Zone ID" cf_zone_id; export CF_Zone_ID="$cf_zone_id"
@@ -285,23 +264,13 @@ install_warp() {
     if is_alpine; then return; fi
     if ! command -v warp-cli >/dev/null 2>&1; then
         msg_info "正在安装 Cloudflare WARP..."
-        if command -v apt-get >/dev/null 2>&1; then
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-            DPKG_ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-            echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-            apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
-        elif command -v yum >/dev/null 2>&1; then
-            msg_error "WARP 不支持 yum 系系统，请手动安装或使用 apt 系统。"
-            return 1
-        else
-            msg_error "无法安装 WARP：不支持当前包管理器。"
-            return 1
-        fi
+        curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+        DPKG_ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+        echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+        apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
     fi
-    if command -v warp-cli >/dev/null 2>&1; then
-        warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
-        warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
-    fi
+    warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
+    warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
 }
 
 generate_config() {
@@ -376,9 +345,7 @@ EOF
 
 setup_services() {
     local ARGO_CMD="$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
-    if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-        ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
-    fi
+    [ "$ARGO_MODE" == "fixed" ] && ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
 
     if is_alpine; then
         cat > /etc/init.d/sing-box << EOF
@@ -390,21 +357,12 @@ pidfile="/var/run/sing-box.pid"
 EOF
         cat > /etc/init.d/sb-argo << EOF
 #!/sbin/openrc-run
-command="$ARGO_BIN"
-command_args="tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
+command="/bin/sh"
+command_args="-c '$ARGO_CMD > $ARGO_LOG 2>&1'"
 command_background=true
 pidfile="/var/run/sb-argo.pid"
 EOF
-        # 如果固定隧道模式，覆盖命令参数
-        if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-            sed -i "s|command_args=\".*\"|command_args=\"tunnel run --token $ARGO_TOKEN\"|" /etc/init.d/sb-argo
-        fi
         chmod +x /etc/init.d/sing-box /etc/init.d/sb-argo
-        # 日志重定向：在 rc-service 中直接重定向
-        if ! grep -q "output_log" /etc/init.d/sb-argo; then
-            sed -i '/command_background=true/a output_log="/var/log/sb-argo.log"' /etc/init.d/sb-argo
-            sed -i '/output_log/a error_log="/var/log/sb-argo.log"' /etc/init.d/sb-argo
-        fi
     else
         cat > /etc/systemd/system/sing-box.service << EOF
 [Unit]
@@ -416,46 +374,21 @@ Restart=always
 RestartSec=3
 StartLimitInterval=0
 LimitNOFILE=1048576
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$ARGO_LOG
-StandardError=append:$ARGO_LOG
 [Install]
 WantedBy=multi-user.target
 EOF
-        # 修复 systemd 变量展开问题：使用绝对路径并在 ExecStart 中直接写入命令
-        if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
-            cat > /etc/systemd/system/sb-argo.service << EOF
+        cat > /etc/systemd/system/sb-argo.service << EOF
 [Unit]
 Description=Argo Tunnel for Sing-box
 After=network.target
 [Service]
-ExecStart=$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto
+ExecStart=/bin/bash -c '$ARGO_CMD > $ARGO_LOG 2>&1'
 Restart=always
 RestartSec=3
 StartLimitInterval=0
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$ARGO_LOG
-StandardError=append:$ARGO_LOG
 [Install]
 WantedBy=multi-user.target
 EOF
-        else
-            cat > /etc/systemd/system/sb-argo.service << EOF
-[Unit]
-Description=Argo Tunnel for Sing-box
-After=network.target
-[Service]
-ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN
-Restart=always
-RestartSec=3
-StartLimitInterval=0
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$ARGO_LOG
-StandardError=append:$ARGO_LOG
-[Install]
-WantedBy=multi-user.target
-EOF
-        fi
         svc_action reload
     fi
 
@@ -472,7 +405,10 @@ check_existing() {
     if [ -f "$SB_INFO" ]; then
         msg_warn "检测到系统已部署过节点！"
         reading "是否确定要清除旧配置并重新安装？[y/n]" confirm
-        [[ "$confirm" != "y" ]] && return 1
+        # 不区分大小写比较
+        if [[ "${confirm,,}" != "y" ]]; then
+            return 1
+        fi
         find "$SB_DIR" -type f ! -name "sub.txt" ! -name "server.crt" ! -name "server.key" -delete 2>/dev/null
     fi
     return 0
@@ -531,12 +467,19 @@ install_custom() {
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
     
     echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
-    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd; [ "${c_vd:-y}" == "y" ] && ENABLE_VD=1 || ENABLE_VD=0
-    reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re; [ "${c_re:-y}" == "y" ] && ENABLE_RE=1 || ENABLE_RE=0
-    reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy; [ "${c_hy:-y}" == "y" ] && ENABLE_HY=1 || ENABLE_HY=0
-    reading "启用 TUIC v5 (UDP) [y/n] (默认 y)" c_tc; [ "${c_tc:-y}" == "y" ] && ENABLE_TC=1 || ENABLE_TC=0
-    reading "启用 SOCKS5 [y/n] (默认 y)" c_s5; [ "${c_s5:-y}" == "y" ] && ENABLE_S5=1 || ENABLE_S5=0
-    reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar; [ "${c_ar:-y}" == "y" ] && ENABLE_ARGO=1 || ENABLE_ARGO=0
+    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd
+    # 不区分大小写比较
+    if [[ "${c_vd,,:-y}" == "y" ]]; then ENABLE_VD=1; else ENABLE_VD=0; fi
+    reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re
+    if [[ "${c_re,,:-y}" == "y" ]]; then ENABLE_RE=1; else ENABLE_RE=0; fi
+    reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy
+    if [[ "${c_hy,,:-y}" == "y" ]]; then ENABLE_HY=1; else ENABLE_HY=0; fi
+    reading "启用 TUIC v5 (UDP) [y/n] (默认 y)" c_tc
+    if [[ "${c_tc,,:-y}" == "y" ]]; then ENABLE_TC=1; else ENABLE_TC=0; fi
+    reading "启用 SOCKS5 [y/n] (默认 y)" c_s5
+    if [[ "${c_s5,,:-y}" == "y" ]]; then ENABLE_S5=1; else ENABLE_S5=0; fi
+    reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar
+    if [[ "${c_ar,,:-y}" == "y" ]]; then ENABLE_ARGO=1; else ENABLE_ARGO=0; fi
 
     echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
@@ -728,7 +671,7 @@ show_nodes() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         local argo_domain=""
         if [ "$ARGO_MODE" == "temp" ]; then
-            for i in {1..5}; do argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | head -n 1 | sed 's/https:\/\///'); [ -n "$argo_domain" ] && break; sleep 1; done
+            for i in {1..5}; do argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" | head -n 1 | sed 's/https:\/\///'); [ -n "$argo_domain" ] && break; sleep 1; done
             [ -n "$argo_domain" ] && argo_type="临时随机隧道"
         elif [ "$ARGO_MODE" == "fixed" ]; then
             argo_domain="$ARGO_DOMAIN"; argo_type="固定专线隧道"
@@ -771,7 +714,10 @@ show_nodes() {
 uninstall_script() {
     print_logo; echo -e " ${BG_RED} 危险警告 ${NC} ${RED}你正在执行物理毁灭程序！${NC}\n"
     reading "确定要彻底卸载脚本、核心及配置吗？[y/n]" c
-    [[ "$c" != "y" ]] && return
+    # 不区分大小写比较
+    if [[ "${c,,}" != "y" ]]; then
+        return
+    fi
 
     echo ""; for i in {3..1}; do echo -e "${YELLOW}将在 $i 秒后开始清理...${NC}"; sleep 1; done
     
@@ -785,14 +731,7 @@ uninstall_script() {
         rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service; systemctl daemon-reload
     fi
     
-    if command -v warp-cli >/dev/null 2>&1; then
-        warp-cli disconnect >/dev/null 2>&1
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get remove -y cloudflare-warp >/dev/null 2>&1
-        elif command -v yum >/dev/null 2>&1; then
-            yum remove -y cloudflare-warp >/dev/null 2>&1
-        fi
-    fi
+    if command -v warp-cli >/dev/null 2>&1; then warp-cli disconnect >/dev/null 2>&1; apt-get remove -y cloudflare-warp >/dev/null 2>&1; fi
 
     find "$SB_DIR" -type f ! -name "sub.txt" -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
@@ -807,14 +746,14 @@ main_menu() {
         
         echo -e "   系统状态: $status"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        echo -e "   ${GREEN}[1]${NC} 🚀 一键快速部署 / 重置引擎"
+        echo -e "   ${GREEN}[1]${NC} 🚀  一键快速部署 / 重置引擎"
         echo -e "   ${GREEN}[2]${NC} 🛠️  自定义按需部署 / 重置引擎"
         echo -e "   ${GREEN}[3]${NC} ⚙️  单独协议参数管理 (端口/密码/证书/停用)"
-        echo -e "   ${GREEN}[4]${NC} 🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
-        echo -e "   ${GREEN}[5]${NC} 🔗 查看提取节点订阅链接"
+        echo -e "   ${GREEN}[4]${NC} 🌐  调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
+        echo -e "   ${GREEN}[5]${NC} 🔗  查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         echo -e "   ${RED}[9]${NC} 🗑️  彻底卸载 (安全清理服务与残留)"
-        echo -e "   ${RED}[0]${NC} 🚪 安全退出面板"
+        echo -e "   ${RED}[0]${NC} 🚪  安全退出面板"
         echo ""
         reading "请输入指令代码" choice
         case $choice in
