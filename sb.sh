@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 (修复版 + 不区分大小写 y/n + 制表符对齐)
+# Sing-box 6-in-1
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.7) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -592,8 +592,8 @@ manage_protocols() {
         [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}\n"
         [ "$ENABLE_RE" == "1" ] && printf "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}\n"
         [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}\n"
-        [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️  修改 TUIC v5     ${YELLOW}(端口: $PORT_TC)${NC}\n"
-        [ "$ENABLE_S5" == "1" ] && printf "${PURPLE}┃${NC}  [5]\t🛡️  修改 SOCKS5      ${YELLOW}(端口: $PORT_S5)${NC}\n"
+        [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5     ${YELLOW}(端口: $PORT_TC)${NC}\n"
+        [ "$ENABLE_S5" == "1" ] && printf "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5      ${YELLOW}(端口: $PORT_S5)${NC}\n"
         [ "$ENABLE_ARGO" == "1" ] && printf "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}\n"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         printf "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}\n"
@@ -673,7 +673,7 @@ manage_warp() {
         printf "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式\n"
         printf "${PURPLE}┃${NC}  [2]\t➕ 追加目标分流域名\n"
         printf "${PURPLE}┃${NC}  [3]\t➖ 移除指定分流域名\n"
-        printf "${PURPLE}┃${NC}  [4]\t🗑️  清空所有分流名单\n"
+        printf "${PURPLE}┃${NC}  [4]\t🗑️ 清空所有分流名单\n"
         printf "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单\n"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
@@ -817,7 +817,7 @@ main_menu() {
         echo -e "   系统状态: $status"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         printf "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎\n"
-        printf "   ${GREEN}[2]${NC}\t🛠️  自定义按需部署 / 重置引擎\n"
+        printf "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎\n"
         printf "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/密码/证书/停用)\n"
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
