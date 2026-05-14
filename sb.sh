@@ -334,11 +334,11 @@ generate_config() {
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ] },"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
         else
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
         fi
     fi
 
@@ -532,7 +532,7 @@ install_custom() {
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
     echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
-    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd
+    reading "启用 VLESS (TCP) [y/n] (默认 y)" c_vd
     if [[ "${c_vd,,:-y}" == "y" ]]; then ENABLE_VD=1; else ENABLE_VD=0; fi
     reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re
     if [[ "${c_re,,:-y}" == "y" ]]; then ENABLE_RE=1; else ENABLE_RE=0; fi
@@ -547,7 +547,7 @@ install_custom() {
 
     echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
-        reading "VLESS (WS) 外网端口 (回车随机)" PORT_VD
+        reading "VLESS (TCP) 外网端口 (回车随机)" PORT_VD
         [ -z "$PORT_VD" ] && while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
     fi
     if [ "$ENABLE_RE" == "1" ]; then
@@ -589,7 +589,7 @@ manage_protocols() {
     while true; do
         print_logo
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}\n"
+        [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (TCP)  ${YELLOW}(端口: $PORT_VD)${NC}\n"
         [ "$ENABLE_RE" == "1" ] && printf "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}\n"
         [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}\n"
         [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}\n"
@@ -634,7 +634,7 @@ manage_protocols() {
                 ;;
             7)
                 echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
-                [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
+                [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (TCP)"
                 [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
                 [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
                 [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
@@ -720,14 +720,14 @@ show_nodes() {
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP]${NC} (关闭 TLS 纯直连)"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=tcp#${NODE_PREFIX}-VLESS"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
-            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP + TLS]${NC} (真实证书: ${VD_DOMAIN})"
+            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=tcp#${NODE_PREFIX}-VLESS"
         else
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP + TLS]${NC} (自签伪装证书)"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=tcp&allowInsecure=1#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
