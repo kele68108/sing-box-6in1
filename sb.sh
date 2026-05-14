@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1
+# Sing-box 6-in-1 (Integrated with TCP Brutal)
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -49,6 +49,18 @@ if [[ "$0" != "/usr/bin/sb" ]]; then
     sleep 1
 fi
 
+is_alpine() { [ -f /etc/alpine-release ]; }
+
+# --- 检测虚拟化架构 (拦截 LXC / OpenVZ) ---
+check_virt_support() {
+    if [[ -d "/proc/vz" ]] || [[ -f "/proc/user_beancounters" ]]; then return 1; fi
+    if command -v systemd-detect-virt >/dev/null 2>&1; then
+        local virt=$(systemd-detect-virt)
+        if [[ "$virt" == "lxc" || "$virt" == "wsl" || "$virt" == "openvz" ]]; then return 1; fi
+    fi
+    return 0
+}
+
 load_config() {
     [ -f "$SB_INFO" ] && source "$SB_INFO"
     [ -z "$VD_MODE" ] && VD_MODE="2"
@@ -59,6 +71,11 @@ load_config() {
     [ -z "$ENABLE_TC" ] && ENABLE_TC="1"
     [ -z "$ENABLE_S5" ] && ENABLE_S5="1"
     [ -z "$ENABLE_ARGO" ] && ENABLE_ARGO="1"
+    
+    # TCP Brutal 配置加载
+    [ -z "$ENABLE_BRUTAL" ] && ENABLE_BRUTAL="0"
+    [ -z "$BRUTAL_UP" ] && BRUTAL_UP="0"
+    [ -z "$BRUTAL_DOWN" ] && BRUTAL_DOWN="0"
 }
 
 save_config() {
@@ -91,10 +108,11 @@ ENABLE_HY=$ENABLE_HY
 ENABLE_TC=$ENABLE_TC
 ENABLE_S5=$ENABLE_S5
 ENABLE_ARGO=$ENABLE_ARGO
+ENABLE_BRUTAL=$ENABLE_BRUTAL
+BRUTAL_UP=$BRUTAL_UP
+BRUTAL_DOWN=$BRUTAL_DOWN
 EOF
 }
-
-is_alpine() { [ -f /etc/alpine-release ]; }
 
 svc_action() {
     local action=$1; local service=$2
@@ -147,38 +165,20 @@ get_outbound_ip() {
     echo "$ip"
 }
 
-# --- 获取归属地并生成国旗前缀 ---
 get_country_prefix() {
     local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
     [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
 
     case "$cc" in
-        "CN") echo "🇨🇳中国" ;;
-        "HK") echo "🇭🇰香港" ;;
-        "TW") echo "🇹🇼台湾" ;;
-        "MO") echo "🇲🇴澳门" ;;
-        "JP") echo "🇯🇵日本" ;;
-        "KR") echo "🇰🇷韩国" ;;
-        "SG") echo "🇸🇬新加坡" ;;
-        "US") echo "🇺🇸美国" ;;
-        "GB") echo "🇬🇧英国" ;;
-        "DE") echo "🇩🇪德国" ;;
-        "FR") echo "🇫🇷法国" ;;
-        "NL") echo "🇳🇱荷兰" ;;
-        "RU") echo "🇷🇺俄罗斯" ;;
-        "CA") echo "🇨🇦加拿大" ;;
-        "IN") echo "🇮🇳印度" ;;
-        "AU") echo "🇦🇺澳大利亚" ;;
-        "BR") echo "🇧🇷巴西" ;;
-        "MY") echo "🇲🇾马来西亚" ;;
-        "TH") echo "🇹🇭泰国" ;;
-        "VN") echo "🇻🇳越南" ;;
-        "PH") echo "🇵🇭菲律宾" ;;
-        "TR") echo "🇹🇷土耳其" ;;
-        "AR") echo "🇦🇷阿根廷" ;;
-        "ZA") echo "🇿🇦南非" ;;
-        "AE") echo "🇦🇪阿联酋" ;;
-        *) echo "🌍未知" ;;
+        "CN") echo "🇨🇳中国" ;; "HK") echo "🇭🇰香港" ;; "TW") echo "🇹🇼台湾" ;;
+        "MO") echo "🇲🇴澳门" ;; "JP") echo "🇯🇵日本" ;; "KR") echo "🇰🇷韩国" ;;
+        "SG") echo "🇸🇬新加坡" ;; "US") echo "🇺🇸美国" ;; "GB") echo "🇬🇧英国" ;;
+        "DE") echo "🇩🇪德国" ;; "FR") echo "🇫🇷法国" ;; "NL") echo "🇳🇱荷兰" ;;
+        "RU") echo "🇷🇺俄罗斯" ;; "CA") echo "🇨🇦加拿大" ;; "IN") echo "🇮🇳印度" ;;
+        "AU") echo "🇦🇺澳大利亚" ;; "BR") echo "🇧🇷巴西" ;; "MY") echo "🇲🇾马来西亚" ;;
+        "TH") echo "🇹🇭泰国" ;; "VN") echo "🇻🇳越南" ;; "PH") echo "🇵🇭菲律宾" ;;
+        "TR") echo "🇹🇷土耳其" ;; "AR") echo "🇦🇷阿根廷" ;; "ZA") echo "🇿🇦南非" ;;
+        "AE") echo "🇦🇪阿联酋" ;; *) echo "🌍未知" ;;
     esac
 }
 
@@ -201,7 +201,7 @@ EOF
 
 install_deps() {
     echo ""; msg_info "正在检查并安装基础依赖环境..."
-    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps")
+    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "python3")
     if is_alpine; then
         apk update >/dev/null 2>&1; apk add libc6-compat gcompat >/dev/null 2>&1
         for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apk add "$pkg" >/dev/null 2>&1; done
@@ -322,6 +322,12 @@ generate_config() {
         [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
     fi
 
+    # Brutal Json 参数动态生成
+    local brutal_json=""
+    if [ "$ENABLE_BRUTAL" == "1" ]; then
+        brutal_json=", \"tcp_fast_open\": true, \"tcp_congestion_control\": \"brutal\", \"up_mbps\": $BRUTAL_UP, \"down_mbps\": $BRUTAL_DOWN"
+    fi
+
     local INBOUNDS=""
 
     if [ "$ENABLE_ARGO" == "1" ]; then
@@ -329,16 +335,16 @@ generate_config() {
     fi
 
     if [ "$ENABLE_RE" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
+        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } ${brutal_json} },"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ] ${brutal_json} },"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } ${brutal_json} },"
         else
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } ${brutal_json} },"
         fi
     fi
 
@@ -532,7 +538,7 @@ install_custom() {
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
     echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
-    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd
+    reading "启用 VLESS (TCP) [y/n] (默认 y)" c_vd
     if [[ "${c_vd,,:-y}" == "y" ]]; then ENABLE_VD=1; else ENABLE_VD=0; fi
     reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re
     if [[ "${c_re,,:-y}" == "y" ]]; then ENABLE_RE=1; else ENABLE_RE=0; fi
@@ -547,7 +553,7 @@ install_custom() {
 
     echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
-        reading "VLESS (WS) 外网端口 (回车随机)" PORT_VD
+        reading "VLESS (TCP) 外网端口 (回车随机)" PORT_VD
         [ -z "$PORT_VD" ] && while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
     fi
     if [ "$ENABLE_RE" == "1" ]; then
@@ -589,7 +595,7 @@ manage_protocols() {
     while true; do
         print_logo
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}\n"
+        [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (TCP)  ${YELLOW}(端口: $PORT_VD)${NC}\n"
         [ "$ENABLE_RE" == "1" ] && printf "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}\n"
         [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}\n"
         [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}\n"
@@ -634,7 +640,7 @@ manage_protocols() {
                 ;;
             7)
                 echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
-                [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
+                [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (TCP)"
                 [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
                 [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
                 [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
@@ -689,6 +695,81 @@ manage_warp() {
     done
 }
 
+manage_brutal() {
+    [ ! -f "$SB_INFO" ] && msg_error "请先进行部署！" && sleep 1 && return
+    load_config
+    while true; do
+        print_logo
+        local status="${BG_RED} 未安装 ${NC}"
+        [ "$ENABLE_BRUTAL" == "1" ] && status="${BG_GREEN} 已启用 (上行:${BRUTAL_UP}M / 下行:${BRUTAL_DOWN}M) ${NC}"
+
+        echo -e "${PURPLE}╭━━━ ⚡ ${BG_BLUE} TCP Brutal 加速引擎 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
+        echo -e "${PURPLE}┃${NC} 当前状态: $status"
+        echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        printf "${PURPLE}┃${NC}  [1]\t🚀 安装 / 重新配置 TCP Brutal 模块\n"
+        printf "${PURPLE}┃${NC}  [2]\t🗑️ 卸载 TCP Brutal 模块\n"
+        printf "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单\n"
+        echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
+
+        reading "请选择操作 [0-2]" choice
+        case $choice in
+            1)
+                if is_alpine || ! check_virt_support; then
+                    msg_error "当前系统 (Alpine) 或虚拟化架构 (LXC/OpenVZ) 无法安装内核模块！"
+                    sleep 2; continue
+                fi
+                msg_info "正在安装 Python 测速组件..."
+                if ! command -v speedtest-cli >/dev/null 2>&1; then
+                    curl -sL https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py -o /usr/local/bin/speedtest-cli
+                    chmod +x /usr/local/bin/speedtest-cli
+                fi
+                
+                msg_info "正在进行网络带宽测试 (约需30秒，请耐心等待)..."
+                local st_out=$(speedtest-cli --simple 2>/dev/null)
+                local down=$(echo "$st_out" | grep "Download" | awk '{print $2}' | cut -d. -f1)
+                local up=$(echo "$st_out" | grep "Upload" | awk '{print $2}' | cut -d. -f1)
+
+                if [[ -z "$down" || -z "$up" ]]; then
+                    msg_warn "网络测速失败，系统将切换为手动输入模式。"
+                    down=500; up=500
+                else
+                    # 给测速结果打 9 折，预留 10% 缓冲防止严重断流
+                    down=$(( down * 9 / 10 )); up=$(( up * 9 / 10 ))
+                    msg_success "测速完成！已为您计算出安全防护带宽 (预留10%缓冲)"
+                fi
+                
+                echo ""
+                reading "请输入上行发包带宽 (Mbps) [回车默认使用建议值: $up]" input_up
+                BRUTAL_UP=${input_up:-$up}
+                reading "请输入下行收包带宽 (Mbps) [回车默认使用建议值: $down]" input_down
+                BRUTAL_DOWN=${input_down:-$down}
+
+                msg_info "正在从 GitHub 下载并编译 DKMS 模块 (视机器性能约需 1-3 分钟)..."
+                bash <(curl -fsSL https://tcp.hy2.sh) install
+                if [ $? -eq 0 ]; then
+                    ENABLE_BRUTAL=1
+                    save_config; generate_config; svc_action restart sing-box
+                    msg_success "TCP Brutal 配置成功并已完成热生效！"
+                else
+                    msg_error "编译安装失败！可能是由于缺少 linux-headers 导致。"
+                fi
+                sleep 2
+                ;;
+            2)
+                if [ "$ENABLE_BRUTAL" == "0" ]; then msg_warn "尚未启用该功能！"; sleep 1; continue; fi
+                msg_info "正在卸载 tcp-brutal 内核模块..."
+                bash <(curl -fsSL https://tcp.hy2.sh) uninstall
+                ENABLE_BRUTAL=0; BRUTAL_UP=0; BRUTAL_DOWN=0
+                save_config; generate_config; svc_action restart sing-box
+                msg_success "TCP Brutal 已彻底卸载并清理残留！"
+                sleep 2
+                ;;
+            0) break ;;
+            *) continue ;;
+        esac
+    done
+}
+
 show_nodes() {
     print_logo; [ ! -f "$SB_INFO" ] && msg_error "请先部署节点！" && sleep 1 && return
     load_config
@@ -709,25 +790,31 @@ show_nodes() {
     local ip=$CUSTOM_IP
     [[ "$ip" =~ .*:.* ]] && ip="[${ip}]"
 
+    # --- 动态生成 Brutal 订阅参数 ---
+    local brutal_param=""
+    if [ "$ENABLE_BRUTAL" == "1" ]; then
+        brutal_param="&tcpCongestion=brutal"
+    fi
+
     echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
+        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp${brutal_param}#${NODE_PREFIX}-REALITY"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP]${NC} (关闭 TLS 纯直连)"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=none&type=tcp${brutal_param}#${NODE_PREFIX}-VLESS"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
-            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP + TLS]${NC} (真实证书: ${VD_DOMAIN})"
+            link1="vless://${UUID}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=tcp${brutal_param}#${NODE_PREFIX}-VLESS"
         else
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + TCP + TLS]${NC} (自签伪装证书)"
+            link1="vless://${UUID}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=tcp&allowInsecure=1${brutal_param}#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -803,6 +890,12 @@ uninstall_script() {
         fi
     fi
 
+    # 卸载 Brutal
+    if [ "$ENABLE_BRUTAL" == "1" ]; then
+        msg_info "正在清理 TCP Brutal 内核模块..."
+        bash <(curl -fsSL https://tcp.hy2.sh) uninstall >/dev/null 2>&1
+    fi
+
     find "$SB_DIR" -type f ! -name "sub.txt" -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
     msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
@@ -821,6 +914,7 @@ main_menu() {
         printf "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/密码/证书/停用)\n"
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
+        printf "   ${GREEN}[6]${NC}\t⚡ 部署 TCP Brutal 拥塞控制内核加速\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载 (安全清理服务与残留)\n"
         printf "   ${RED}[0]${NC}\t🚪 安全退出面板\n"
@@ -832,6 +926,7 @@ main_menu() {
             3) manage_protocols ;;
             4) manage_warp ;;
             5) show_nodes ;;
+            6) manage_brutal ;;
             9) uninstall_script ;;
             0) clear; exit 0 ;;
             *) ;;
