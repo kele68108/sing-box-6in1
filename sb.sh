@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 (Integrated with TCP Brutal)
+# Sing-box 6-in-1 (Integrated with TCP Brutal V2)
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -322,10 +322,10 @@ generate_config() {
         [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
     fi
 
-    # Brutal Json 参数动态生成
+    # [修复] Sing-box 的 Brutal 必须作为 smux (多路复用) 的子模块存在，否则会解析报错导致服务崩溃。
     local brutal_json=""
     if [ "$ENABLE_BRUTAL" == "1" ]; then
-        brutal_json=", \"tcp_fast_open\": true, \"tcp_congestion_control\": \"brutal\", \"up_mbps\": $BRUTAL_UP, \"down_mbps\": $BRUTAL_DOWN"
+        brutal_json=", \"tcp_fast_open\": true, \"multiplex\": { \"enabled\": true, \"padding\": false, \"brutal\": { \"enabled\": true, \"up_mbps\": $BRUTAL_UP, \"down_mbps\": $BRUTAL_DOWN } }"
     fi
 
     local INBOUNDS=""
@@ -335,10 +335,13 @@ generate_config() {
     fi
 
     if [ "$ENABLE_RE" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } ${brutal_json} },"
+        # [核心机制] XTLS-Vision 与多路复用 (Multiplex) 是底层互斥的！
+        # 在 Sing-box 中 Brutal 依赖 Multiplex，因此绝对不能将 brutal_json 注入到 Reality 中。
+        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
+        # Brutal JSON 仅安全地注入到 VLESS (TCP) 节点
         if [ "$VD_MODE" == "1" ]; then
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ] ${brutal_json} },"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
@@ -383,6 +386,12 @@ EOF
 }
 
 setup_services() {
+    # [安全防护] 在重启服务前强制校验 JSON 语法，防止所有节点挂掉
+    if ! $SB_BIN check -c "$SB_CONF" >/dev/null 2>&1; then
+        msg_error "Sing-box 核心配置校验失败！(可能有参数不兼容)"
+        return 1
+    fi
+
     local ARGO_CMD="$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
     if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
         ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
@@ -724,16 +733,16 @@ manage_brutal() {
                     chmod +x /usr/local/bin/speedtest-cli
                 fi
                 
-                msg_info "正在进行网络带宽测试 (约需30秒，请耐心等待)..."
-                local st_out=$(speedtest-cli --simple 2>/dev/null)
+                msg_info "正在进行网络带宽测试 (约需30-60秒，请耐心等待)..."
+                # [修复 Bug 1]: 显式调用 python3 并加入 --secure 参数解决证书信任与命令失效问题
+                local st_out=$(python3 /usr/local/bin/speedtest-cli --secure --simple 2>/dev/null)
                 local down=$(echo "$st_out" | grep "Download" | awk '{print $2}' | cut -d. -f1)
                 local up=$(echo "$st_out" | grep "Upload" | awk '{print $2}' | cut -d. -f1)
 
                 if [[ -z "$down" || -z "$up" ]]; then
-                    msg_warn "网络测速失败，系统将切换为手动输入模式。"
+                    msg_warn "网络测速超时或被墙，系统平滑切换为手动输入模式。"
                     down=500; up=500
                 else
-                    # 给测速结果打 9 折，预留 10% 缓冲防止严重断流
                     down=$(( down * 9 / 10 )); up=$(( up * 9 / 10 ))
                     msg_success "测速完成！已为您计算出安全防护带宽 (预留10%缓冲)"
                 fi
@@ -746,22 +755,31 @@ manage_brutal() {
 
                 msg_info "正在从 GitHub 下载并编译 DKMS 模块 (视机器性能约需 1-3 分钟)..."
                 bash <(curl -fsSL https://tcp.hy2.sh) install
-                if [ $? -eq 0 ]; then
+                if [ $? -eq 0 ] && lsmod | grep -q brutal; then
                     ENABLE_BRUTAL=1
-                    save_config; generate_config; svc_action restart sing-box
-                    msg_success "TCP Brutal 配置成功并已完成热生效！"
+                    save_config; generate_config
+                    
+                    # [修复 Bug 2]: 这里加入了强力拦截，如果配置文件依旧存在不兼容字段，立刻回滚！
+                    if $SB_BIN check -c $SB_CONF >/dev/null 2>&1; then
+                        svc_action restart sing-box
+                        msg_success "TCP Brutal 配置成功并已完成热生效！"
+                    else
+                        msg_error "检测到配置参数与当前 Sing-box 核心冲突，已自动回滚以保护节点存活！"
+                        ENABLE_BRUTAL=0; save_config; generate_config; svc_action restart sing-box
+                    fi
                 else
-                    msg_error "编译安装失败！可能是由于缺少 linux-headers 导致。"
+                    msg_error "内核挂载失败！可能是缺 linux-headers 或当前内核过老不支持。"
+                    bash <(curl -fsSL https://tcp.hy2.sh) uninstall >/dev/null 2>&1
                 fi
                 sleep 2
                 ;;
             2)
                 if [ "$ENABLE_BRUTAL" == "0" ]; then msg_warn "尚未启用该功能！"; sleep 1; continue; fi
                 msg_info "正在卸载 tcp-brutal 内核模块..."
-                bash <(curl -fsSL https://tcp.hy2.sh) uninstall
+                bash <(curl -fsSL https://tcp.hy2.sh) uninstall >/dev/null 2>&1
                 ENABLE_BRUTAL=0; BRUTAL_UP=0; BRUTAL_DOWN=0
                 save_config; generate_config; svc_action restart sing-box
-                msg_success "TCP Brutal 已彻底卸载并清理残留！"
+                msg_success "TCP Brutal 已彻底卸载并恢复默认 BBR 拥塞控制！"
                 sleep 2
                 ;;
             0) break ;;
@@ -790,7 +808,7 @@ show_nodes() {
     local ip=$CUSTOM_IP
     [[ "$ip" =~ .*:.* ]] && ip="[${ip}]"
 
-    # --- 动态生成 Brutal 订阅参数 ---
+    # --- Brutal 订阅参数 (仅 VLESS 适用，且客户端须打开 Mux/多路复用 才能触发) ---
     local brutal_param=""
     if [ "$ENABLE_BRUTAL" == "1" ]; then
         brutal_param="&tcpCongestion=brutal"
@@ -801,7 +819,8 @@ show_nodes() {
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp${brutal_param}#${NODE_PREFIX}-REALITY"
+        # ⚠️ 注意：Reality 流控去掉了 brutal_param，因为它不支持多路复用。
+        link_re="vless://${UUID}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
