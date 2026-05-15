@@ -42,7 +42,6 @@ SB_LOG="${SB_DIR}/sing-box.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
-# 修复快捷键判定逻辑，精准过滤解释器本身
 if [[ "$0" != "/usr/bin/sb" ]]; then
     _script_name=$(basename "$0")
     if [[ -f "$0" && "$_script_name" != "bash" && "$_script_name" != "sh" && "$_script_name" != "dash" ]]; then
@@ -179,7 +178,7 @@ ask_uuid() {
         reading "$prompt_text" temp_input
         if [ -z "$temp_input" ]; then eval "$var_name=\"\""; return; fi
         if [[ ! "$temp_input" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
-            msg_error "必须是标准的 UUID 格式！(例如: 550e8400-e29b-41d4-a716-446655440000)"
+            msg_error "必须是标准的 UUID 格式！"
             continue
         fi
         eval "$var_name=\"$temp_input\""
@@ -187,7 +186,6 @@ ask_uuid() {
     done
 }
 
-# 增加目标端口强包围校验
 ask_port_range() {
     local prompt_text="$1"; local var_name="$2"; local target_port="$3"; local temp_input
     while true; do
@@ -204,7 +202,7 @@ ask_port_range() {
         fi
         if [ -n "$target_port" ]; then
             if [ "$target_port" -lt "$p_start" ] || [ "$target_port" -gt "$p_end" ]; then
-                msg_error "逻辑错误！主端口 ($target_port) 必须包含在你填写的跳跃段 ($p_start-$p_end) 之间，否则节点必定失联 (-1)！"
+                msg_error "逻辑错误！主端口 ($target_port) 必须包含在你填写的跳跃段 ($p_start-$p_end) 内，否则节点必定失联！"
                 continue
             fi
         fi
@@ -235,11 +233,7 @@ get_country_prefix() {
         "MO") echo "🇲🇴澳门" ;; "JP") echo "🇯🇵日本" ;; "KR") echo "🇰🇷韩国" ;;
         "SG") echo "🇸🇬新加坡" ;; "US") echo "🇺🇸美国" ;; "GB") echo "🇬🇧英国" ;;
         "DE") echo "🇩🇪德国" ;; "FR") echo "🇫🇷法国" ;; "NL") echo "🇳🇱荷兰" ;;
-        "RU") echo "🇷🇺俄罗斯" ;; "CA") echo "🇨🇦加拿大" ;; "IN") echo "🇮🇳印度" ;;
-        "AU") echo "🇦🇺澳大利亚" ;; "BR") echo "🇧🇷巴西" ;; "MY") echo "🇲🇾马来西亚" ;;
-        "TH") echo "🇹🇭泰国" ;; "VN") echo "🇻🇳越南" ;; "PH") echo "🇵🇭菲律宾" ;;
-        "TR") echo "🇹🇷土耳其" ;; "AR") echo "🇦🇷阿根廷" ;; "ZA") echo "🇿🇦南非" ;;
-        "AE") echo "🇦🇪阿联酋" ;; *) echo "🌍未知" ;;
+        *) echo "🌍未知" ;;
     esac
 }
 
@@ -287,7 +281,7 @@ safe_download() {
     local url=$1; local dest=$2
     msg_info "正在下载核心组件: $(basename $dest)..."
     local http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
-    if [ "$http_code" != "200" ]; then msg_error "文件下载失败！(HTTP: $http_code)"; rm -f "$dest"; return 1; fi
+    if [ "$http_code" != "200" ]; then msg_error "文件下载失败！"; rm -f "$dest"; return 1; fi
     if [ ! -s "$dest" ]; then msg_error "下载失败！文件为空。"; rm -f "$dest"; return 1; fi
     return 0
 }
@@ -332,7 +326,6 @@ install_singbox() {
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
             TAG=$(curl -sL https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | head -n 1)
             [ -z "$TAG" ] && TAG="v1.9.3"
-            msg_warn "触发 Github API 限制，已启用备用解析获取版本: $TAG"
         fi
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
             tar -xzf sb.tar.gz || { msg_error "解压失败"; exit 1; }
@@ -362,8 +355,8 @@ install_warp() {
             else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
             apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
-        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统，请手动安装或使用 apt 系统。"; return 1
-        else msg_error "无法安装 WARP：不支持当前包管理器。"; return 1; fi
+        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
+        else return 1; fi
     fi
     if command -v warp-cli >/dev/null 2>&1; then
         warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
@@ -442,14 +435,29 @@ EOF
     save_config
 }
 
-# --- 防火墙端口跳跃模块 ---
+# --- 防火墙端口跳跃模块 (带高级冲突规避) ---
 apply_iptables() {
-    iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null || true
-    ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null || true
+    # 彻底清洗老规则
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
 
     if [ "$ENABLE_HY" == "1" ] && [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ]; then
         local start_port=$(echo $HY_PORTS | cut -d'-' -f1)
         local end_port=$(echo $HY_PORTS | cut -d'-' -f2)
+
+        # 核心逻辑：为 TUIC 和 SOCKS5 建立豁免通道，防止被 Hy2 规则强行劫持
+        if [ "$ENABLE_TC" == "1" ] && [ -n "$PORT_TC" ]; then
+            iptables -t nat -A PREROUTING -p udp --dport $PORT_TC -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport $PORT_TC -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+        fi
+        if [ "$ENABLE_S5" == "1" ] && [ -n "$PORT_S5" ]; then
+            iptables -t nat -A PREROUTING -p udp --dport $PORT_S5 -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport $PORT_S5 -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+        fi
+
+        # 建立跳跃劫持规则
         iptables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -m comment --comment "hy2-hopping" -j REDIRECT --to-ports $PORT_HY 2>/dev/null
         ip6tables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -m comment --comment "hy2-hopping" -j REDIRECT --to-ports $PORT_HY 2>/dev/null
     fi
@@ -560,14 +568,12 @@ check_existing() {
     if [ -f "$SB_INFO" ]; then
         msg_warn "检测到系统已部署过节点！"
         reading "是否确定要清除旧配置并重新安装？[y/n]" confirm
-        confirm=${confirm,,}
-        if [[ "$confirm" != "y" ]]; then return 1; fi
+        confirm=${confirm,,}; if [[ "$confirm" != "y" ]]; then return 1; fi
         find "$SB_DIR" -type f ! -name "server.crt" ! -name "server.key" -delete 2>/dev/null
     fi
     return 0
 }
 
-# --- 一键极速部署 ---
 install_fast() {
     print_logo
     echo -e "${BG_PURPLE} 一键极速部署 ${NC} ${YELLOW}开始部署全协议...${NC}\n"
@@ -575,13 +581,9 @@ install_fast() {
 
     install_deps; install_singbox; install_argo
 
-    UUID_VD=$(cat /proc/sys/kernel/random/uuid)
-    UUID_RE=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid)
-    UUID_TC=$(cat /proc/sys/kernel/random/uuid)
-    
-    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
-    PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
+    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
     ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
@@ -598,17 +600,14 @@ install_fast() {
     REALITY_SNI="www.microsoft.com"
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""
-    VD_MODE="2"; VD_DOMAIN=""
+    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
     HY_HOPPING="0"; HY_PORTS=""
 
     msg_info "正在写入底层架构并启动守护进程..."
     generate_config; setup_services
-    echo ""; msg_success "一键部署已完成！"
-    sleep 2
+    echo ""; msg_success "一键部署已完成！"; sleep 2
 }
 
-# --- 自定义按需部署 ---
 install_custom() {
     print_logo
     echo -e "${BG_PURPLE} 自定义部署 ${NC} ${YELLOW}进入按需部署模式...${NC}\n"
@@ -616,13 +615,9 @@ install_custom() {
 
     install_deps; install_singbox; install_argo
 
-    UUID_VD=$(cat /proc/sys/kernel/random/uuid)
-    UUID_RE=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid)
-    UUID_TC=$(cat /proc/sys/kernel/random/uuid)
-    
-    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
-    PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
+    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
     echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
@@ -634,11 +629,14 @@ install_custom() {
     reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar; c_ar=${c_ar,,}; [ -z "$c_ar" ] && c_ar="y"; ENABLE_ARGO=$([[ "$c_ar" == "y" ]] && echo 1 || echo 0)
 
     echo -e "\n${BG_BLUE} 端口与参数分配 ${NC}"
+    
     if [ "$ENABLE_VD" == "1" ]; then
-        ask_port "VLESS (WS) 外网端口 (回车随机)" PORT_VD; [ -z "$PORT_VD" ] && PORT_VD=$(get_random_port)
+        ask_port "VLESS (WS) 外网端口 (回车随机)" PORT_VD
+        if [ -z "$PORT_VD" ]; then PORT_VD=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 VLESS 端口: ${GREEN}$PORT_VD${NC}"; fi
     fi
     if [ "$ENABLE_RE" == "1" ]; then
-        ask_port "Reality 外网端口 (建议443，回车随机)" PORT_RE; [ -z "$PORT_RE" ] && PORT_RE=$(get_random_port)
+        ask_port "Reality 外网端口 (建议443，回车随机)" PORT_RE
+        if [ -z "$PORT_RE" ]; then PORT_RE=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Reality 端口: ${GREEN}$PORT_RE${NC}"; fi
         msg_info "正在生成 Reality 密钥对..."
         local keys=$($SB_BIN generate reality-keypair)
         REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
@@ -647,7 +645,9 @@ install_custom() {
         REALITY_SNI="www.microsoft.com"
     fi
     if [ "$ENABLE_HY" == "1" ]; then
-        ask_port "Hysteria2 外网端口 (回车随机)" PORT_HY; [ -z "$PORT_HY" ] && PORT_HY=$(get_random_port)
+        ask_port "Hysteria2 外网端口 (回车随机)" PORT_HY
+        if [ -z "$PORT_HY" ]; then PORT_HY=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Hysteria2 端口: ${GREEN}$PORT_HY${NC}"; fi
+        
         reading "是否开启端口跳跃 (Port Hopping)? [y/n] (默认 n)" ph
         if [[ "${ph,,}" == "y" ]]; then
             HY_HOPPING=1
@@ -655,20 +655,20 @@ install_custom() {
         else HY_HOPPING=0; HY_PORTS=""; fi
     fi
     if [ "$ENABLE_TC" == "1" ]; then
-        ask_port "TUIC 外网端口 (回车随机)" PORT_TC; [ -z "$PORT_TC" ] && PORT_TC=$(get_random_port)
+        ask_port "TUIC 外网端口 (回车随机)" PORT_TC
+        if [ -z "$PORT_TC" ]; then PORT_TC=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 TUIC 端口: ${GREEN}$PORT_TC${NC}"; fi
     fi
     if [ "$ENABLE_S5" == "1" ]; then
-        ask_port "SOCKS5 外网端口 (回车随机)" PORT_S5; [ -z "$PORT_S5" ] && PORT_S5=$(get_random_port)
+        ask_port "SOCKS5 外网端口 (回车随机)" PORT_S5
+        if [ -z "$PORT_S5" ]; then PORT_S5=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 SOCKS5 端口: ${GREEN}$PORT_S5${NC}"; fi
     fi
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""
-    VD_MODE="2"; VD_DOMAIN=""
+    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
 
     echo ""; msg_info "正在写入底层架构并启动守护进程..."
     generate_config; setup_services
-    echo ""; msg_success "自定义部署已完成！"
-    sleep 2
+    echo ""; msg_success "自定义部署已完成！"; sleep 2
 }
 
 manage_protocols() {
@@ -915,8 +915,10 @@ uninstall_script() {
     svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
     svc_action disable sing-box >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
 
-    iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null || true
-    ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null || true
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
 
     if is_alpine; then rm -f /etc/init.d/sing-box /etc/init.d/sb-argo
     else rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service; systemctl daemon-reload; fi
@@ -927,6 +929,7 @@ uninstall_script() {
         elif command -v yum >/dev/null 2>&1; then yum remove -y cloudflare-warp >/dev/null 2>&1; fi
     fi
 
+    # 此处已删除 ! -name "sub.txt" 的限制，实现彻底销毁
     find "$SB_DIR" -type f -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
     msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
@@ -946,6 +949,7 @@ main_menu() {
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
+        # 卸载菜单文字已更新，提示会清理所有数据
         printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载\n"
         printf "   ${RED}[0]${NC}\t🚪 退出面板\n"
         echo ""
