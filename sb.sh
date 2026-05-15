@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1
+# Sing-box 6-in-1 (v6.8)
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.7) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.8) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -41,7 +41,6 @@ ARGO_LOG="${SB_DIR}/argo.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
-# 防止管道流直接执行覆盖系统 bash
 if [[ "$0" != "/usr/bin/sb" ]]; then
     if [ -f "$0" ]; then
         rm -f /usr/bin/sb 2>/dev/null
@@ -54,6 +53,23 @@ if [[ "$0" != "/usr/bin/sb" ]]; then
         sleep 1
     fi
 fi
+
+# --- 端口严格校验函数 ---
+valid_port() {
+    local p=$1
+    if [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; then return 0; fi
+    return 1
+}
+
+valid_port_range() {
+    local pr=$1
+    if [[ "$pr" =~ ^[0-9]+-[0-9]+$ ]]; then
+        local p1=${pr%-*}
+        local p2=${pr#*-}
+        if valid_port "$p1" && valid_port "$p2" && [ "$p1" -lt "$p2" ]; then return 0; fi
+    fi
+    return 1
+}
 
 load_config() {
     [ -f "$SB_INFO" ] && source "$SB_INFO"
@@ -511,7 +527,7 @@ check_existing() {
         if [[ "${confirm,,}" != "y" ]]; then
             return 1
         fi
-        svc_action stop sing-box >/dev/null 2>&1 # 停止服务以触发清理旧 iptables 规则
+        svc_action stop sing-box >/dev/null 2>&1
         find "$SB_DIR" -type f ! -name "sub.txt" ! -name "server.crt" ! -name "server.key" -delete 2>/dev/null
     fi
     return 0
@@ -587,12 +603,18 @@ install_custom() {
 
     echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
-        reading "VLESS (WS) 外网端口 (回车随机)" PORT_VD
-        [ -z "$PORT_VD" ] && while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
+        while true; do
+            reading "VLESS (WS) 外网端口 (1-65535, 回车随机)" p
+            if [ -z "$p" ]; then while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done; break; fi
+            if valid_port "$p"; then PORT_VD=$p; break; else msg_error "无效的端口格式！请输入 1-65535 之间的纯数字。"; fi
+        done
     fi
     if [ "$ENABLE_RE" == "1" ]; then
-        reading "Reality 外网端口 (建议443，回车随机)" PORT_RE
-        [ -z "$PORT_RE" ] && while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done
+        while true; do
+            reading "Reality 外网端口 (1-65535, 建议443，回车随机)" p
+            if [ -z "$p" ]; then while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done; break; fi
+            if valid_port "$p"; then PORT_RE=$p; break; else msg_error "无效的端口格式！请输入 1-65535 之间的纯数字。"; fi
+        done
         msg_info "正在生成 Reality 密钥对..."
         local keys=$($SB_BIN generate reality-keypair)
         REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
@@ -601,16 +623,25 @@ install_custom() {
         REALITY_SNI="www.microsoft.com"
     fi
     if [ "$ENABLE_HY" == "1" ]; then
-        reading "Hysteria2 外网端口 (回车随机)" PORT_HY
-        [ -z "$PORT_HY" ] && while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done
+        while true; do
+            reading "Hysteria2 外网端口 (1-65535, 回车随机)" p
+            if [ -z "$p" ]; then while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done; break; fi
+            if valid_port "$p"; then PORT_HY=$p; break; else msg_error "无效的端口格式！请输入 1-65535 之间的纯数字。"; fi
+        done
     fi
     if [ "$ENABLE_TC" == "1" ]; then
-        reading "TUIC 外网端口 (回车随机)" PORT_TC
-        [ -z "$PORT_TC" ] && while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done
+        while true; do
+            reading "TUIC 外网端口 (1-65535, 回车随机)" p
+            if [ -z "$p" ]; then while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done; break; fi
+            if valid_port "$p"; then PORT_TC=$p; break; else msg_error "无效的端口格式！请输入 1-65535 之间的纯数字。"; fi
+        done
     fi
     if [ "$ENABLE_S5" == "1" ]; then
-        reading "SOCKS5 外网端口 (回车随机)" PORT_S5
-        [ -z "$PORT_S5" ] && while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done
+        while true; do
+            reading "SOCKS5 外网端口 (1-65535, 回车随机)" p
+            if [ -z "$p" ]; then while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done; break; fi
+            if valid_port "$p"; then PORT_S5=$p; break; else msg_error "无效的端口格式！请输入 1-65535 之间的纯数字。"; fi
+        done
     fi
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
@@ -643,7 +674,11 @@ manage_protocols() {
         case $choice in
             1)
                 [ "$ENABLE_VD" != "1" ] && continue
-                reading "新 VLESS 端口 (回车不变)" p; [ -n "$p" ] && PORT_VD=$p
+                while true; do
+                    reading "新 VLESS 端口 (1-65535, 回车不变)" p
+                    [ -z "$p" ] && break
+                    if valid_port "$p"; then PORT_VD=$p; break; else msg_error "无效的端口格式！"; fi
+                done
                 reading "新 UUID (回车不变)" u; [ -n "$u" ] && UUID=$u
                 echo -e "\n  ${YELLOW}请选择 VLESS 模式：${NC}"
                 echo -e "  [1] 关闭 TLS (纯普通直连)"
@@ -657,26 +692,54 @@ manage_protocols() {
                 ;;
             2)
                 [ "$ENABLE_RE" != "1" ] && continue
-                reading "新 Reality 端口 (回车不变)" p; [ -n "$p" ] && PORT_RE=$p
+                while true; do
+                    reading "新 Reality 端口 (1-65535, 回车不变)" p
+                    [ -z "$p" ] && break
+                    if valid_port "$p"; then PORT_RE=$p; break; else msg_error "无效的端口格式！"; fi
+                done
                 reading "伪装 SNI 域名 (当前: $REALITY_SNI)" s; [ -n "$s" ] && REALITY_SNI=$s
                 ;;
             3) 
                 [ "$ENABLE_HY" != "1" ] && continue
-                reading "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p
+                while true; do
+                    reading "新 Hy2 端口 (1-65535, 回车不变)" p
+                    [ -z "$p" ] && break
+                    if valid_port "$p"; then PORT_HY=$p; break; else msg_error "无效的端口格式！"; fi
+                done
                 reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw 
-                reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_HY:-未开启})" hp
-                if [ "$hp" == "0" ]; then HOP_HY=""
-                elif [ -n "$hp" ]; then HOP_HY=${hp//:/-}; fi # 统一转化为横杠格式
+                while true; do
+                    reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_HY:-未开启})" hp
+                    [ -z "$hp" ] && break
+                    if [ "$hp" == "0" ]; then HOP_HY=""; break; fi
+                    local hp_format=${hp//:/-} # 统一转化为横杠格式
+                    if valid_port_range "$hp_format"; then HOP_HY=$hp_format; break; else msg_error "无效的区间格式！请确保前小后大，例如 20000-30000"; fi
+                done
                 ;;
             4) 
                 [ "$ENABLE_TC" != "1" ] && continue
-                reading "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p
+                while true; do
+                    reading "新 TUIC 端口 (1-65535, 回车不变)" p
+                    [ -z "$p" ] && break
+                    if valid_port "$p"; then PORT_TC=$p; break; else msg_error "无效的端口格式！"; fi
+                done
                 reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw 
-                reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_TC:-未开启})" hp
-                if [ "$hp" == "0" ]; then HOP_TC=""
-                elif [ -n "$hp" ]; then HOP_TC=${hp//:/-}; fi
+                while true; do
+                    reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_TC:-未开启})" hp
+                    [ -z "$hp" ] && break
+                    if [ "$hp" == "0" ]; then HOP_TC=""; break; fi
+                    local hp_format=${hp//:/-}
+                    if valid_port_range "$hp_format"; then HOP_TC=$hp_format; break; else msg_error "无效的区间格式！请确保前小后大，例如 20000-30000"; fi
+                done
                 ;;
-            5) [ "$ENABLE_S5" != "1" ] && continue; reading "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw ;;
+            5) 
+                [ "$ENABLE_S5" != "1" ] && continue
+                while true; do
+                    reading "新 Socks5 端口 (1-65535, 回车不变)" p
+                    [ -z "$p" ] && break
+                    if valid_port "$p"; then PORT_S5=$p; break; else msg_error "无效的端口格式！"; fi
+                done
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw 
+                ;;
             6)
                 [ "$ENABLE_ARGO" != "1" ] && continue
                 reading "[1]=临时隧道(随机域名)  [2]=固定隧道" am
@@ -705,7 +768,7 @@ manage_protocols() {
             *) continue ;;
         esac
         msg_info "正在清理旧规则并热重载内核配置..."
-        svc_action stop sing-box >/dev/null 2>&1 # 必须先停止服务，触发系统销毁旧的防火墙跳跃规则
+        svc_action stop sing-box >/dev/null 2>&1
         generate_config; setup_services
         msg_success "配置热重载完成！"; sleep 1
     done
@@ -807,17 +870,17 @@ show_nodes() {
     if [ "$ENABLE_HY" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        local hy_port_str=$PORT_HY; local hy_extra=""
-        if [ -n "$HOP_HY" ]; then hy_port_str=$HOP_HY; hy_extra="&mport=${HOP_HY}"; fi
-        link3="hysteria2://${PW_HY}@${ip}:${hy_port_str}?insecure=1&sni=bing.com${hy_extra}#${NODE_PREFIX}-HY2"
+        local hy_extra=""
+        # 修正：保持 URL 主端口纯净，将跳跃区间写入 mport 参数，兼容标准客户端
+        if [ -n "$HOP_HY" ]; then hy_extra="&mport=${HOP_HY}"; fi
+        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${hy_extra}#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        local tc_port_str=$PORT_TC
-        if [ -n "$HOP_TC" ]; then tc_port_str=$HOP_TC; fi
-        link4="tuic://${UUID}:${PW_TC}@${ip}:${tc_port_str}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        # 修正：TUIC 无通用跳跃 URL 参数标准，隐藏跳跃信息以确保 v2rayN 成功导入和连接基础端口
+        link4="tuic://${UUID}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
