@@ -927,7 +927,7 @@ uninstall_script() {
         elif command -v yum >/dev/null 2>&1; then yum remove -y cloudflare-warp >/dev/null 2>&1; fi
     fi
 
-    find "$SB_DIR" -type f ! -name "sub.txt" -delete 2>/dev/null
+    find "$SB_DIR" -type f -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
     msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
 }
@@ -946,7 +946,7 @@ main_menu() {
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载 (保留 sub.txt 订阅文件)\n"
+        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载\n"
         printf "   ${RED}[0]${NC}\t🚪 安全退出面板\n"
         echo ""
         reading "请输入指令代码" choice
