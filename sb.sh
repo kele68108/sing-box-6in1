@@ -41,12 +41,18 @@ ARGO_LOG="${SB_DIR}/argo.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
+# [修复1] 防止管道流直接执行覆盖系统 bash
 if [[ "$0" != "/usr/bin/sb" ]]; then
-    rm -f /usr/bin/sb 2>/dev/null
-    cp -f "$0" /usr/bin/sb
-    chmod +x /usr/bin/sb
-    msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
-    sleep 1
+    if [ -f "$0" ]; then
+        rm -f /usr/bin/sb 2>/dev/null
+        cp -f "$0" /usr/bin/sb
+        chmod +x /usr/bin/sb
+        msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
+        sleep 1
+    else
+        msg_warn "管道流运行，已跳过快捷指令创建。建议手动将脚本保存至 /usr/bin/sb"
+        sleep 1
+    fi
 fi
 
 load_config() {
@@ -147,38 +153,18 @@ get_outbound_ip() {
     echo "$ip"
 }
 
-# --- 获取归属地并生成国旗前缀 ---
 get_country_prefix() {
     local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
     [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
 
     case "$cc" in
-        "CN") echo "🇨🇳中国" ;;
-        "HK") echo "🇭🇰香港" ;;
-        "TW") echo "🇹🇼台湾" ;;
-        "MO") echo "🇲🇴澳门" ;;
-        "JP") echo "🇯🇵日本" ;;
-        "KR") echo "🇰🇷韩国" ;;
-        "SG") echo "🇸🇬新加坡" ;;
-        "US") echo "🇺🇸美国" ;;
-        "GB") echo "🇬🇧英国" ;;
-        "DE") echo "🇩🇪德国" ;;
-        "FR") echo "🇫🇷法国" ;;
-        "NL") echo "🇳🇱荷兰" ;;
-        "RU") echo "🇷🇺俄罗斯" ;;
-        "CA") echo "🇨🇦加拿大" ;;
-        "IN") echo "🇮🇳印度" ;;
-        "AU") echo "🇦🇺澳大利亚" ;;
-        "BR") echo "🇧🇷巴西" ;;
-        "MY") echo "🇲🇾马来西亚" ;;
-        "TH") echo "🇹🇭泰国" ;;
-        "VN") echo "🇻🇳越南" ;;
-        "PH") echo "🇵🇭菲律宾" ;;
-        "TR") echo "🇹🇷土耳其" ;;
-        "AR") echo "🇦🇷阿根廷" ;;
-        "ZA") echo "🇿🇦南非" ;;
-        "AE") echo "🇦🇪阿联酋" ;;
-        *) echo "🌍未知" ;;
+        "CN") echo "🇨🇳中国" ;; "HK") echo "🇭🇰香港" ;; "TW") echo "🇹🇼台湾" ;; "MO") echo "🇲🇴澳门" ;;
+        "JP") echo "🇯🇵日本" ;; "KR") echo "🇰🇷韩国" ;; "SG") echo "🇸🇬新加坡" ;; "US") echo "🇺🇸美国" ;;
+        "GB") echo "🇬🇧英国" ;; "DE") echo "🇩🇪德国" ;; "FR") echo "🇫🇷法国" ;; "NL") echo "🇳🇱荷兰" ;;
+        "RU") echo "🇷🇺俄罗斯" ;; "CA") echo "🇨🇦加拿大" ;; "IN") echo "🇮🇳印度" ;; "AU") echo "🇦🇺澳大利亚" ;;
+        "BR") echo "🇧🇷巴西" ;; "MY") echo "🇲🇾马来西亚" ;; "TH") echo "🇹🇭泰国" ;; "VN") echo "🇻🇳越南" ;;
+        "PH") echo "🇵🇭菲律宾" ;; "TR") echo "🇹🇷土耳其" ;; "AR") echo "🇦🇷阿根廷" ;; "ZA") echo "🇿🇦南非" ;;
+        "AE") echo "🇦🇪阿联酋" ;; *) echo "🌍未知" ;;
     esac
 }
 
@@ -210,8 +196,10 @@ install_deps() {
             apt-get update -y >/dev/null 2>&1
             for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
         elif command -v yum >/dev/null 2>&1; then
+            # [修复7] 将 epel-release 移出循环，避免重复安装
+            yum install -y epel-release >/dev/null 2>&1
             yum makecache -y >/dev/null 2>&1
-            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y epel-release "$pkg" >/dev/null 2>&1; done
+            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y "$pkg" >/dev/null 2>&1; done
         else
             msg_error "不支持的包管理器，请手动安装依赖：${pkgs[*]}"
             exit 1
@@ -276,7 +264,8 @@ install_singbox() {
 
 install_argo() {
     if [ ! -f "$ARGO_BIN" ]; then
-        ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; esac
+        # [修复5] 增加不支持架构的拦截
+        ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; *) msg_error "不支持的架构: ${ARCH}"; return 1 ;; esac
         if safe_download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${A_ARCH}" "$ARGO_BIN"; then
             chmod +x "$ARGO_BIN"
         fi
@@ -284,13 +273,16 @@ install_argo() {
 }
 
 install_warp() {
-    if is_alpine; then return; fi
+    if is_alpine; then return 1; fi
     if ! command -v warp-cli >/dev/null 2>&1; then
         msg_info "正在安装 Cloudflare WARP..."
         if command -v apt-get >/dev/null 2>&1; then
             curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
             DPKG_ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-            echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+            # [修复4] 不再依赖可能缺失的 lsb_release 命令
+            local sys_code=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            [ -z "$sys_code" ] && sys_code=$(lsb_release -cs 2>/dev/null)
+            echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${sys_code} main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
             apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
         elif command -v yum >/dev/null 2>&1; then
             msg_error "WARP 不支持 yum 系系统，请手动安装或使用 apt 系统。"
@@ -303,7 +295,10 @@ install_warp() {
     if command -v warp-cli >/dev/null 2>&1; then
         warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
         warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
+    else
+        return 1
     fi
+    return 0
 }
 
 generate_config() {
@@ -328,28 +323,29 @@ generate_config() {
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-argo\", \"listen\": \"127.0.0.1\", \"listen_port\": 10086, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/argo\" } },"
     fi
 
+    # [修复2] 将 :: 替换为 0.0.0.0 防止纯 IPv4 内核启动崩溃
     if [ "$ENABLE_RE" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
+        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         else
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         fi
     fi
 
     if [ "$ENABLE_HY" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"hysteria2\", \"tag\": \"in-hy2\", \"listen\": \"::\", \"listen_port\": $PORT_HY, \"users\": [ { \"password\": \"$PW_HY\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
+        INBOUNDS="$INBOUNDS { \"type\": \"hysteria2\", \"tag\": \"in-hy2\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_HY, \"users\": [ { \"password\": \"$PW_HY\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"tuic\", \"tag\": \"in-tuic\", \"listen\": \"::\", \"listen_port\": $PORT_TC, \"users\": [ { \"uuid\": \"$UUID\", \"password\": \"$PW_TC\" } ], \"tls\": { \"enabled\": true, \"alpn\": [\"h3\"], \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"congestion_control\": \"bbr\" },"
+        INBOUNDS="$INBOUNDS { \"type\": \"tuic\", \"tag\": \"in-tuic\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_TC, \"users\": [ { \"uuid\": \"$UUID\", \"password\": \"$PW_TC\" } ], \"tls\": { \"enabled\": true, \"alpn\": [\"h3\"], \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"congestion_control\": \"bbr\" },"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"socks\", \"tag\": \"in-socks\", \"listen\": \"::\", \"listen_port\": $PORT_S5, \"users\": [ { \"username\": \"$S5_U\", \"password\": \"$S5_P\" } ] },"
+        INBOUNDS="$INBOUNDS { \"type\": \"socks\", \"tag\": \"in-socks\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_S5, \"users\": [ { \"username\": \"$S5_U\", \"password\": \"$S5_P\" } ] },"
     fi
 
     INBOUNDS=${INBOUNDS%,}
@@ -377,11 +373,7 @@ EOF
 }
 
 setup_services() {
-    local ARGO_CMD="$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
-    if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-        ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
-    fi
-
+    # [修复9] 移除了未被实际调用的无效 ARGO_CMD 变量判断
     if is_alpine; then
         cat > /etc/init.d/sing-box << EOF
 #!/sbin/openrc-run
@@ -679,7 +671,8 @@ manage_warp() {
 
         reading "请选择操作 [0-4]" choice
         case $choice in
-            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
+            # [修复6] 捕捉 install_warp 的失败返回值，失败则退回直连模式
+            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; if [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]]; then install_warp || { WARP_MODE=1; msg_error "WARP 启动失败，已恢复直连模式。"; continue; }; fi ;;
             2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
             3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
             4) WARP_DOMAINS="" ;;
@@ -735,7 +728,8 @@ show_nodes() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         local argo_domain=""
         if [ "$ARGO_MODE" == "temp" ]; then
-            for i in {1..5}; do argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | head -n 1 | sed 's/https:\/\///'); [ -n "$argo_domain" ] && break; sleep 1; done
+            # [修复3] 将 head -n 1 替换为 tail -n 1 解决读取过期域名的 bug
+            for i in {1..5}; do argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | tail -n 1 | sed 's/https:\/\///'); [ -n "$argo_domain" ] && break; sleep 1; done
             [ -n "$argo_domain" ] && argo_type="临时随机隧道"
         elif [ "$ARGO_MODE" == "fixed" ]; then
             argo_domain="$ARGO_DOMAIN"; argo_type="固定专线隧道"
@@ -771,7 +765,8 @@ show_nodes() {
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
     echo -e "\n ${BG_BLUE} Base64 订阅 ${NC} 一键复制以下内容导入客户端:"
-    echo -e "$all_links" | sed '/^$/d' | base64 | tr -d '\n'
+    # [修复8] 修正 echo 的默认换行符，避免 base64 生成末尾多余空节点
+    echo -ne "$all_links" | sed '/^$/d' | base64 | tr -d '\n'
     reading "按回车键 (Enter) 返回主菜单..." dummy
 }
 
