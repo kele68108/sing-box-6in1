@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1 (修复版)
+# Sing-box 6-in-1 (完美修复版)
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.7) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -38,16 +38,22 @@ SB_INFO="${SB_DIR}/install.info"
 SB_BIN="/usr/local/bin/sing-box"
 ARGO_BIN="/usr/local/bin/cloudflared"
 ARGO_LOG="${SB_DIR}/argo.log"
-SB_LOG="${SB_DIR}/sing-box.log"                # 分离 sing-box 日志
+SB_LOG="${SB_DIR}/sing-box.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
+# 修复 1: 防止 curl | bash 管道执行时销毁系统 bash 解释器
 if [[ "$0" != "/usr/bin/sb" ]]; then
-    rm -f /usr/bin/sb 2>/dev/null
-    cp -f "$0" /usr/bin/sb
-    chmod +x /usr/bin/sb
-    msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
-    sleep 1
+    if [[ -f "$0" && "$0" != *"bash"* && "$0" != *"sh"* ]]; then
+        rm -f /usr/bin/sb 2>/dev/null
+        cp -f "$0" /usr/bin/sb
+        chmod +x /usr/bin/sb
+        msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
+        sleep 1
+    else
+        msg_warn "检测到内存管道执行，跳过快捷指令 'sb' 生成。如需生成，请将脚本下载到本地执行。"
+        sleep 2
+    fi
 fi
 
 load_config() {
@@ -93,7 +99,6 @@ ENABLE_TC=$ENABLE_TC
 ENABLE_S5=$ENABLE_S5
 ENABLE_ARGO=$ENABLE_ARGO
 EOF
-    # 修复: 敏感配置文件权限设为 600
     chmod 600 "$SB_INFO"
 }
 
@@ -131,6 +136,18 @@ check_port_usage() {
     return 0
 }
 
+# 修复 4: 突破原生 $RANDOM 的 32767 限制
+get_random_port() {
+    local port
+    while true; do
+        port=$(( ((RANDOM << 15) | RANDOM) % 50000 + 10000 ))
+        if check_port_usage "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+}
+
 get_outbound_ip() {
     local ip=""
     for i in 1 2 3; do
@@ -150,38 +167,20 @@ get_outbound_ip() {
     echo "$ip"
 }
 
-# --- 获取归属地并生成国旗前缀 ---
 get_country_prefix() {
     local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
     [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
 
     case "$cc" in
-        "CN") echo "🇨🇳中国" ;;
-        "HK") echo "🇭🇰香港" ;;
-        "TW") echo "🇹🇼台湾" ;;
-        "MO") echo "🇲🇴澳门" ;;
-        "JP") echo "🇯🇵日本" ;;
-        "KR") echo "🇰🇷韩国" ;;
-        "SG") echo "🇸🇬新加坡" ;;
-        "US") echo "🇺🇸美国" ;;
-        "GB") echo "🇬🇧英国" ;;
-        "DE") echo "🇩🇪德国" ;;
-        "FR") echo "🇫🇷法国" ;;
-        "NL") echo "🇳🇱荷兰" ;;
-        "RU") echo "🇷🇺俄罗斯" ;;
-        "CA") echo "🇨🇦加拿大" ;;
-        "IN") echo "🇮🇳印度" ;;
-        "AU") echo "🇦🇺澳大利亚" ;;
-        "BR") echo "🇧🇷巴西" ;;
-        "MY") echo "🇲🇾马来西亚" ;;
-        "TH") echo "🇹🇭泰国" ;;
-        "VN") echo "🇻🇳越南" ;;
-        "PH") echo "🇵🇭菲律宾" ;;
-        "TR") echo "🇹🇷土耳其" ;;
-        "AR") echo "🇦🇷阿根廷" ;;
-        "ZA") echo "🇿🇦南非" ;;
-        "AE") echo "🇦🇪阿联酋" ;;
-        *) echo "🌍未知" ;;
+        "CN") echo "🇨🇳中国" ;; "HK") echo "🇭🇰香港" ;; "TW") echo "🇹🇼台湾" ;;
+        "MO") echo "🇲🇴澳门" ;; "JP") echo "🇯🇵日本" ;; "KR") echo "🇰🇷韩国" ;;
+        "SG") echo "🇸🇬新加坡" ;; "US") echo "🇺🇸美国" ;; "GB") echo "🇬🇧英国" ;;
+        "DE") echo "🇩🇪德国" ;; "FR") echo "🇫🇷法国" ;; "NL") echo "🇳🇱荷兰" ;;
+        "RU") echo "🇷🇺俄罗斯" ;; "CA") echo "🇨🇦加拿大" ;; "IN") echo "🇮🇳印度" ;;
+        "AU") echo "🇦🇺澳大利亚" ;; "BR") echo "🇧🇷巴西" ;; "MY") echo "🇲🇾马来西亚" ;;
+        "TH") echo "🇹🇭泰国" ;; "VN") echo "🇻🇳越南" ;; "PH") echo "🇵🇭菲律宾" ;;
+        "TR") echo "🇹🇷土耳其" ;; "AR") echo "🇦🇷阿根廷" ;; "ZA") echo "🇿🇦南非" ;;
+        "AE") echo "🇦🇪阿联酋" ;; *) echo "🌍未知" ;;
     esac
 }
 
@@ -204,19 +203,23 @@ EOF
 
 install_deps() {
     echo ""; msg_info "正在检查并安装基础依赖环境..."
-    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "lsb-release")
+    # 修复 3: Alpine 环境强制安装 bash 解释器，保证语法兼容性
     if is_alpine; then
-        apk update >/dev/null 2>&1; apk add libc6-compat gcompat >/dev/null 2>&1
-        for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apk add "$pkg" >/dev/null 2>&1; done
+        apk update >/dev/null 2>&1
+        apk add bash curl wget jq openssl lsof socat procps libc6-compat gcompat >/dev/null 2>&1
     else
+        # 修复 6 & 9: 修改 CentOS 下的包名映射，并将 epel-release 移出循环
         if command -v apt-get >/dev/null 2>&1; then
             apt-get update -y >/dev/null 2>&1
-            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
+            local apt_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "lsb-release")
+            for pkg in "${apt_pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
         elif command -v yum >/dev/null 2>&1; then
             yum makecache -y >/dev/null 2>&1
-            for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y epel-release "$pkg" >/dev/null 2>&1; done
+            yum install -y epel-release >/dev/null 2>&1
+            local yum_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps-ng" "redhat-lsb-core")
+            for pkg in "${yum_pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y "$pkg" >/dev/null 2>&1; done
         else
-            msg_error "不支持的包管理器，请手动安装依赖：${pkgs[*]}"
+            msg_error "不支持的包管理器，请手动安装核心依赖。"
             exit 1
         fi
     fi
@@ -246,7 +249,6 @@ apply_cert() {
 
     if [ "$standalone_success" = false ]; then
         msg_error "Standalone 模式失败，切换至 API 验证模式。"
-        # 修复：兼容性写法，避免 ${var,,:-} 可能引发的语法错误
         reading "是否启用 Cloudflare API 继续申请？[y/n]" use_dns
         use_dns=${use_dns,,}
         [ -z "$use_dns" ] && use_dns="y"
@@ -264,7 +266,6 @@ apply_cert() {
 
     mkdir -p "${SB_DIR}"
     ~/.acme.sh/acme.sh --installcert -d "$domain" --fullchain-file "${SB_DIR}/server.crt" --key-file "${SB_DIR}/server.key" --ecc >/dev/null 2>&1
-    # 修复：私钥/证书文件权限设为 600
     chmod 600 "${SB_DIR}/server.crt" "${SB_DIR}/server.key"
     msg_success "真实域名证书部署成功！"
     return 0
@@ -273,11 +274,12 @@ apply_cert() {
 install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
-        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name)
-        # 修复：检查 TAG 是否为空
+        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name 2>/dev/null)
+        # 修复 10: 规避 Github API rate limit
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
-            msg_error "无法获取 sing-box 最新版本信息，请检查网络或 GitHub API 限制。"
-            exit 1
+            TAG=$(curl -sL https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | head -n 1)
+            [ -z "$TAG" ] && TAG="v1.9.3"
+            msg_warn "触发 Github API 限制，已启用备用解析获取版本: $TAG"
         fi
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
             tar -xzf sb.tar.gz || { msg_error "解压失败"; exit 1; }
@@ -302,7 +304,6 @@ install_warp() {
         msg_info "正在安装 Cloudflare WARP..."
         if command -v apt-get >/dev/null 2>&1; then
             curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-            # 修复：如果 lsb_release 不可用则尝试从 /etc/os-release 获取 codename
             local dist_codename=""
             if command -v lsb_release >/dev/null 2>&1; then
                 dist_codename=$(lsb_release -cs)
@@ -331,7 +332,6 @@ generate_config() {
 
     if [[ "$VD_MODE" != "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
         openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "${SB_DIR}/server.key" -out "${SB_DIR}/server.crt" -subj "/CN=bing.com" -days 3650 >/dev/null 2>&1
-        # 修复：设置自签证书文件权限
         chmod 600 "${SB_DIR}/server.key" "${SB_DIR}/server.crt"
     fi
 
@@ -347,6 +347,7 @@ generate_config() {
     local INBOUNDS=""
 
     if [ "$ENABLE_ARGO" == "1" ]; then
+        # 修复 7: 将 localhost 修改为 127.0.0.1
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-argo\", \"listen\": \"127.0.0.1\", \"listen_port\": 10086, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/argo\" } },"
     fi
 
@@ -399,13 +400,13 @@ EOF
 }
 
 setup_services() {
-    local ARGO_CMD="$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
+    # 修复 7: 将 localhost 修改为 127.0.0.1
+    local ARGO_CMD="$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
     if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
         ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
     fi
 
     if is_alpine; then
-        # 修复：直接重写服务文件，避免 sed 注入风险
         cat > /etc/init.d/sing-box << EOF
 #!/sbin/openrc-run
 command="$SB_BIN"
@@ -418,14 +419,13 @@ EOF
         cat > /etc/init.d/sb-argo << EOF
 #!/sbin/openrc-run
 command="$ARGO_BIN"
-command_args="tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto"
+command_args="tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
 command_background=true
 pidfile="/var/run/sb-argo.pid"
 output_log="/var/log/sb-argo.log"
 error_log="/var/log/sb-argo.log"
 EOF
         if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-            # 直接生成正确内容的脚本，不依赖 sed 替换
             cat > /etc/init.d/sb-argo << EOF
 #!/sbin/openrc-run
 command="$ARGO_BIN"
@@ -438,7 +438,6 @@ EOF
         fi
         chmod +x /etc/init.d/sing-box /etc/init.d/sb-argo
     else
-        # 修复：分离 sing-box 与 argo 的日志输出
         cat > /etc/systemd/system/sing-box.service << EOF
 [Unit]
 Description=Sing-box Core Service
@@ -461,7 +460,7 @@ EOF
 Description=Argo Tunnel for Sing-box
 After=network.target
 [Service]
-ExecStart=$ARGO_BIN tunnel --url http://localhost:10086 --no-autoupdate --edge-ip-version auto
+ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto
 Restart=always
 RestartSec=3
 StartLimitInterval=0
@@ -529,11 +528,8 @@ install_fast() {
     ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
 
     msg_info "正在自动分配系统可用端口..."
-    while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
-    while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done
-    while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done
-    while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done
-    while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done
+    PORT_VD=$(get_random_port); PORT_RE=$(get_random_port); PORT_HY=$(get_random_port)
+    PORT_TC=$(get_random_port); PORT_S5=$(get_random_port)
 
     msg_info "正在生成 Reality 专属密钥对..."
     local keys=$($SB_BIN generate reality-keypair)
@@ -582,11 +578,11 @@ install_custom() {
     echo -e "\n${BG_BLUE} 端口分配 ${NC}"
     if [ "$ENABLE_VD" == "1" ]; then
         reading "VLESS (WS) 外网端口 (回车随机)" PORT_VD
-        [ -z "$PORT_VD" ] && while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
+        [ -z "$PORT_VD" ] && PORT_VD=$(get_random_port)
     fi
     if [ "$ENABLE_RE" == "1" ]; then
         reading "Reality 外网端口 (建议443，回车随机)" PORT_RE
-        [ -z "$PORT_RE" ] && while true; do PORT_RE=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_RE && break; done
+        [ -z "$PORT_RE" ] && PORT_RE=$(get_random_port)
         msg_info "正在生成 Reality 密钥对..."
         local keys=$($SB_BIN generate reality-keypair)
         REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
@@ -596,15 +592,15 @@ install_custom() {
     fi
     if [ "$ENABLE_HY" == "1" ]; then
         reading "Hysteria2 外网端口 (回车随机)" PORT_HY
-        [ -z "$PORT_HY" ] && while true; do PORT_HY=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_HY && break; done
+        [ -z "$PORT_HY" ] && PORT_HY=$(get_random_port)
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         reading "TUIC 外网端口 (回车随机)" PORT_TC
-        [ -z "$PORT_TC" ] && while true; do PORT_TC=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_TC && break; done
+        [ -z "$PORT_TC" ] && PORT_TC=$(get_random_port)
     fi
     if [ "$ENABLE_S5" == "1" ]; then
         reading "SOCKS5 外网端口 (回车随机)" PORT_S5
-        [ -z "$PORT_S5" ] && while true; do PORT_S5=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_S5 && break; done
+        [ -z "$PORT_S5" ] && PORT_S5=$(get_random_port)
     fi
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
@@ -637,8 +633,12 @@ manage_protocols() {
         case $choice in
             1)
                 [ "$ENABLE_VD" != "1" ] && continue
-                reading "新 VLESS 端口 (回车不变)" p; [ -n "$p" ] && PORT_VD=$p
-                # 修复：提示 UUID 修改会影响所有协议
+                # 修复 8: 增加手工变更端口时的占用校验
+                reading "新 VLESS 端口 (回车不变)" p
+                if [ -n "$p" ]; then
+                    if ! check_port_usage "$p"; then msg_error "端口 $p 已被占用！"; sleep 1; continue; fi
+                    PORT_VD=$p
+                fi
                 reading "新 UUID (将影响所有共享该 UUID 的协议，回车不变)" u
                 if [ -n "$u" ]; then
                     UUID=$u
@@ -656,12 +656,40 @@ manage_protocols() {
                 ;;
             2)
                 [ "$ENABLE_RE" != "1" ] && continue
-                reading "新 Reality 端口 (回车不变)" p; [ -n "$p" ] && PORT_RE=$p
+                reading "新 Reality 端口 (回车不变)" p
+                if [ -n "$p" ]; then
+                    if ! check_port_usage "$p"; then msg_error "端口 $p 已被占用！"; sleep 1; continue; fi
+                    PORT_RE=$p
+                fi
                 reading "伪装 SNI 域名 (当前: $REALITY_SNI)" s; [ -n "$s" ] && REALITY_SNI=$s
                 ;;
-            3) [ "$ENABLE_HY" != "1" ] && continue; reading "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw ;;
-            4) [ "$ENABLE_TC" != "1" ] && continue; reading "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw ;;
-            5) [ "$ENABLE_S5" != "1" ] && continue; reading "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw ;;
+            3)
+                [ "$ENABLE_HY" != "1" ] && continue
+                reading "新 Hy2 端口 (回车不变)" p
+                if [ -n "$p" ]; then
+                    if ! check_port_usage "$p"; then msg_error "端口 $p 已被占用！"; sleep 1; continue; fi
+                    PORT_HY=$p
+                fi
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw
+                ;;
+            4)
+                [ "$ENABLE_TC" != "1" ] && continue
+                reading "新 TUIC 端口 (回车不变)" p
+                if [ -n "$p" ]; then
+                    if ! check_port_usage "$p"; then msg_error "端口 $p 已被占用！"; sleep 1; continue; fi
+                    PORT_TC=$p
+                fi
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw
+                ;;
+            5)
+                [ "$ENABLE_S5" != "1" ] && continue
+                reading "新 Socks5 端口 (回车不变)" p
+                if [ -n "$p" ]; then
+                    if ! check_port_usage "$p"; then msg_error "端口 $p 已被占用！"; sleep 1; continue; fi
+                    PORT_S5=$p
+                fi
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw
+                ;;
             6)
                 [ "$ENABLE_ARGO" != "1" ] && continue
                 reading "[1]=临时隧道(随机域名)  [2]=固定隧道" am
@@ -708,7 +736,6 @@ manage_warp() {
         echo -e "${PURPLE}╭━━━ 🌐 ${BG_BLUE} WARP 智能大脑 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         echo -e "${PURPLE}┃${NC} 当前模式: ${GREEN}$mode_str${NC}"
         [ "$WARP_MODE" == "3" ] && echo -e "${PURPLE}┃${NC} 分流名单: ${YELLOW}${WARP_DOMAINS:-无}${NC}"
-        # 修复：如果分流模式但未设置域名，给出提示
         [ "$WARP_MODE" == "3" ] && [ -z "$WARP_DOMAINS" ] && echo -e "${PURPLE}┃${NC} ${RED}⚠ 当前分流模式未指定任何域名，流量将全部直连。${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         printf "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式\n"
@@ -776,9 +803,9 @@ show_nodes() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         local argo_domain=""
         if [ "$ARGO_MODE" == "temp" ]; then
-            # 延长重试次数，并增加日志存在性检查
             for i in {1..10}; do
-                [ -f "$ARGO_LOG" ] && argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | head -n 1 | sed 's/https:\/\///')
+                # 修复 2: 使用 tail -n 1 始终抓取最新分配的域名
+                [ -f "$ARGO_LOG" ] && argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | tail -n 1 | sed 's/https:\/\///')
                 [ -n "$argo_domain" ] && break
                 sleep 2
             done
@@ -790,7 +817,6 @@ show_nodes() {
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
         if [ -n "$argo_domain" ]; then
-            # 修复：添加 allowInsecure=1 以兼容自签证书
             link2="vless://${UUID}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo&allowInsecure=1#${NODE_PREFIX}-ARGO"
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
@@ -811,9 +837,9 @@ show_nodes() {
     if [ "$ENABLE_S5" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🛡️  ${GREEN}[SOCKS5]${NC} (基础代理)"
-        # 修复：URL 安全的 Base64 编码
         local cred="${S5_U}:${S5_P}"
-        local b64_cred=$(echo -n "$cred" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        # 修复 5: 回归标准 Base64 编码，适配广泛的代理客户端
+        local b64_cred=$(echo -n "$cred" | base64 -w0)
         link5="socks://${b64_cred}@${ip}:${PORT_S5}#${NODE_PREFIX}-SOCKS5"
         echo -e "${CYAN}┃${NC}    ${link5}"; all_links+="$link5\n"
     fi
@@ -873,7 +899,7 @@ main_menu() {
         printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载 (安全清理服务与残留)\n"
+        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载 (保留 sub.txt 订阅文件)\n"
         printf "   ${RED}[0]${NC}\t🚪 安全退出面板\n"
         echo ""
         reading "请输入指令代码" choice
