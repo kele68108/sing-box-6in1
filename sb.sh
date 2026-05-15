@@ -26,7 +26,7 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.7) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
@@ -41,7 +41,7 @@ ARGO_LOG="${SB_DIR}/argo.log"
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
-# [修复1] 防止管道流直接执行覆盖系统 bash
+# 防止管道流直接执行覆盖系统 bash
 if [[ "$0" != "/usr/bin/sb" ]]; then
     if [ -f "$0" ]; then
         rm -f /usr/bin/sb 2>/dev/null
@@ -65,6 +65,8 @@ load_config() {
     [ -z "$ENABLE_TC" ] && ENABLE_TC="1"
     [ -z "$ENABLE_S5" ] && ENABLE_S5="1"
     [ -z "$ENABLE_ARGO" ] && ENABLE_ARGO="1"
+    [ -z "$HOP_HY" ] && HOP_HY=""
+    [ -z "$HOP_TC" ] && HOP_TC=""
 }
 
 save_config() {
@@ -79,6 +81,8 @@ PORT_RE=$PORT_RE
 PORT_HY=$PORT_HY
 PORT_TC=$PORT_TC
 PORT_S5=$PORT_S5
+HOP_HY=$HOP_HY
+HOP_TC=$HOP_TC
 REALITY_PRK=$REALITY_PRK
 REALITY_PBK=$REALITY_PBK
 REALITY_SNI=$REALITY_SNI
@@ -156,7 +160,6 @@ get_outbound_ip() {
 get_country_prefix() {
     local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
     [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
-
     case "$cc" in
         "CN") echo "🇨🇳中国" ;; "HK") echo "🇭🇰香港" ;; "TW") echo "🇹🇼台湾" ;; "MO") echo "🇲🇴澳门" ;;
         "JP") echo "🇯🇵日本" ;; "KR") echo "🇰🇷韩国" ;; "SG") echo "🇸🇬新加坡" ;; "US") echo "🇺🇸美国" ;;
@@ -187,17 +190,17 @@ EOF
 
 install_deps() {
     echo ""; msg_info "正在检查并安装基础依赖环境..."
-    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps")
+    local pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "iptables")
     if is_alpine; then
         apk update >/dev/null 2>&1; apk add libc6-compat gcompat >/dev/null 2>&1
         for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apk add "$pkg" >/dev/null 2>&1; done
+        apk add ip6tables >/dev/null 2>&1
     else
         if command -v apt-get >/dev/null 2>&1; then
             apt-get update -y >/dev/null 2>&1
             for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
         elif command -v yum >/dev/null 2>&1; then
-            # [修复7] 将 epel-release 移出循环，避免重复安装
-            yum install -y epel-release >/dev/null 2>&1
+            yum install -y epel-release iptables-services >/dev/null 2>&1
             yum makecache -y >/dev/null 2>&1
             for pkg in "${pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y "$pkg" >/dev/null 2>&1; done
         else
@@ -264,7 +267,6 @@ install_singbox() {
 
 install_argo() {
     if [ ! -f "$ARGO_BIN" ]; then
-        # [修复5] 增加不支持架构的拦截
         ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; *) msg_error "不支持的架构: ${ARCH}"; return 1 ;; esac
         if safe_download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${A_ARCH}" "$ARGO_BIN"; then
             chmod +x "$ARGO_BIN"
@@ -279,7 +281,6 @@ install_warp() {
         if command -v apt-get >/dev/null 2>&1; then
             curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
             DPKG_ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
-            # [修复4] 不再依赖可能缺失的 lsb_release 命令
             local sys_code=$(. /etc/os-release && echo "$VERSION_CODENAME")
             [ -z "$sys_code" ] && sys_code=$(lsb_release -cs 2>/dev/null)
             echo "deb [arch=${DPKG_ARCH} signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${sys_code} main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
@@ -322,12 +323,9 @@ generate_config() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-argo\", \"listen\": \"127.0.0.1\", \"listen_port\": 10086, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/argo\" } },"
     fi
-
-    # [修复2] 将 :: 替换为 0.0.0.0 防止纯 IPv4 内核启动崩溃
     if [ "$ENABLE_RE" == "1" ]; then
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
     fi
-
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
@@ -337,7 +335,6 @@ generate_config() {
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         fi
     fi
-
     if [ "$ENABLE_HY" == "1" ]; then
         INBOUNDS="$INBOUNDS { \"type\": \"hysteria2\", \"tag\": \"in-hy2\", \"listen\": \"0.0.0.0\", \"listen_port\": $PORT_HY, \"users\": [ { \"password\": \"$PW_HY\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
     fi
@@ -373,7 +370,6 @@ EOF
 }
 
 setup_services() {
-    # [修复9] 移除了未被实际调用的无效 ARGO_CMD 变量判断
     if is_alpine; then
         cat > /etc/init.d/sing-box << EOF
 #!/sbin/openrc-run
@@ -381,6 +377,38 @@ command="$SB_BIN"
 command_args="run -c $SB_CONF"
 command_background=true
 pidfile="/var/run/sing-box.pid"
+
+start_pre() {
+    if [ "$ENABLE_HY" == "1" ] && [ -n "$HOP_HY" ]; then
+        local pr="${HOP_HY//-/:}"
+        iptables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+        iptables -t nat -I PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+        ip6tables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+        ip6tables -t nat -I PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+    fi
+    if [ "$ENABLE_TC" == "1" ] && [ -n "$HOP_TC" ]; then
+        local pr="${HOP_TC//-/:}"
+        iptables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+        iptables -t nat -I PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+        ip6tables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+        ip6tables -t nat -I PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+    fi
+    return 0
+}
+
+stop_post() {
+    if [ "$ENABLE_HY" == "1" ] && [ -n "$HOP_HY" ]; then
+        local pr="${HOP_HY//-/:}"
+        iptables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+        ip6tables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null || true
+    fi
+    if [ "$ENABLE_TC" == "1" ] && [ -n "$HOP_TC" ]; then
+        local pr="${HOP_TC//-/:}"
+        iptables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+        ip6tables -t nat -D PREROUTING -p udp --dport \$pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null || true
+    fi
+    return 0
+}
 EOF
         cat > /etc/init.d/sb-argo << EOF
 #!/sbin/openrc-run
@@ -402,18 +430,35 @@ EOF
 [Unit]
 Description=Sing-box Core Service
 After=network.target
+
 [Service]
-ExecStart=$SB_BIN run -c $SB_CONF
-Restart=always
-RestartSec=3
-StartLimitInterval=0
 LimitNOFILE=1048576
 WorkingDirectory=$SB_DIR
 StandardOutput=append:$ARGO_LOG
 StandardError=append:$ARGO_LOG
+EOF
+
+        if [ "$ENABLE_HY" == "1" ] && [ -n "$HOP_HY" ]; then
+            local pr="${HOP_HY//-/:}"
+            echo "ExecStartPre=-/bin/sh -c 'iptables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null; ip6tables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+            echo "ExecStartPre=-/bin/sh -c 'iptables -t nat -I PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null; ip6tables -t nat -I PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+            echo "ExecStopPost=-/bin/sh -c 'iptables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null; ip6tables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_HY 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+        fi
+        if [ "$ENABLE_TC" == "1" ] && [ -n "$HOP_TC" ]; then
+            local pr="${HOP_TC//-/:}"
+            echo "ExecStartPre=-/bin/sh -c 'iptables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null; ip6tables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+            echo "ExecStartPre=-/bin/sh -c 'iptables -t nat -I PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null; ip6tables -t nat -I PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+            echo "ExecStopPost=-/bin/sh -c 'iptables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null; ip6tables -t nat -D PREROUTING -p udp --dport $pr -j REDIRECT --to-ports $PORT_TC 2>/dev/null'" >> /etc/systemd/system/sing-box.service
+        fi
+
+        cat >> /etc/systemd/system/sing-box.service << EOF
+ExecStart=$SB_BIN run -c $SB_CONF
+Restart=always
+RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
+
         if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
             cat > /etc/systemd/system/sb-argo.service << EOF
 [Unit]
@@ -466,6 +511,7 @@ check_existing() {
         if [[ "${confirm,,}" != "y" ]]; then
             return 1
         fi
+        svc_action stop sing-box >/dev/null 2>&1 # 停止服务以触发清理旧 iptables 规则
         find "$SB_DIR" -type f ! -name "sub.txt" ! -name "server.crt" ! -name "server.key" -delete 2>/dev/null
     fi
     return 0
@@ -485,6 +531,7 @@ install_fast() {
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
     ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
+    HOP_HY=""; HOP_TC=""
 
     msg_info "正在自动分配系统可用端口..."
     while true; do PORT_VD=$((RANDOM % 50000 + 10000)); check_port_usage $PORT_VD && break; done
@@ -522,6 +569,7 @@ install_custom() {
     PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
+    HOP_HY=""; HOP_TC=""
 
     echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
     reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd
@@ -583,8 +631,8 @@ manage_protocols() {
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}\n"
         [ "$ENABLE_RE" == "1" ] && printf "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}\n"
-        [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}\n"
-        [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}\n"
+        [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY, 跳跃: ${HOP_HY:-未开启})${NC}\n"
+        [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC, 跳跃: ${HOP_TC:-未开启})${NC}\n"
         [ "$ENABLE_S5" == "1" ] && printf "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}\n"
         [ "$ENABLE_ARGO" == "1" ] && printf "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}\n"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
@@ -612,8 +660,22 @@ manage_protocols() {
                 reading "新 Reality 端口 (回车不变)" p; [ -n "$p" ] && PORT_RE=$p
                 reading "伪装 SNI 域名 (当前: $REALITY_SNI)" s; [ -n "$s" ] && REALITY_SNI=$s
                 ;;
-            3) [ "$ENABLE_HY" != "1" ] && continue; reading "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw ;;
-            4) [ "$ENABLE_TC" != "1" ] && continue; reading "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw ;;
+            3) 
+                [ "$ENABLE_HY" != "1" ] && continue
+                reading "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw 
+                reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_HY:-未开启})" hp
+                if [ "$hp" == "0" ]; then HOP_HY=""
+                elif [ -n "$hp" ]; then HOP_HY=${hp//:/-}; fi # 统一转化为横杠格式
+                ;;
+            4) 
+                [ "$ENABLE_TC" != "1" ] && continue
+                reading "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw 
+                reading "开启端口跳跃区间 (如 20000-30000, 输入 0 清除, 回车保持当前: ${HOP_TC:-未开启})" hp
+                if [ "$hp" == "0" ]; then HOP_TC=""
+                elif [ -n "$hp" ]; then HOP_TC=${hp//:/-}; fi
+                ;;
             5) [ "$ENABLE_S5" != "1" ] && continue; reading "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p; reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw ;;
             6)
                 [ "$ENABLE_ARGO" != "1" ] && continue
@@ -642,7 +704,8 @@ manage_protocols() {
             0) break ;;
             *) continue ;;
         esac
-        msg_info "正在热重载内核配置..."
+        msg_info "正在清理旧规则并热重载内核配置..."
+        svc_action stop sing-box >/dev/null 2>&1 # 必须先停止服务，触发系统销毁旧的防火墙跳跃规则
         generate_config; setup_services
         msg_success "配置热重载完成！"; sleep 1
     done
@@ -671,7 +734,6 @@ manage_warp() {
 
         reading "请选择操作 [0-4]" choice
         case $choice in
-            # [修复6] 捕捉 install_warp 的失败返回值，失败则退回直连模式
             1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; if [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]]; then install_warp || { WARP_MODE=1; msg_error "WARP 启动失败，已恢复直连模式。"; continue; }; fi ;;
             2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
             3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
@@ -728,7 +790,6 @@ show_nodes() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         local argo_domain=""
         if [ "$ARGO_MODE" == "temp" ]; then
-            # [修复3] 将 head -n 1 替换为 tail -n 1 解决读取过期域名的 bug
             for i in {1..5}; do argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | tail -n 1 | sed 's/https:\/\///'); [ -n "$argo_domain" ] && break; sleep 1; done
             [ -n "$argo_domain" ] && argo_type="临时随机隧道"
         elif [ "$ARGO_MODE" == "fixed" ]; then
@@ -746,13 +807,17 @@ show_nodes() {
     if [ "$ENABLE_HY" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com#${NODE_PREFIX}-HY2"
+        local hy_port_str=$PORT_HY; local hy_extra=""
+        if [ -n "$HOP_HY" ]; then hy_port_str=$HOP_HY; hy_extra="&mport=${HOP_HY}"; fi
+        link3="hysteria2://${PW_HY}@${ip}:${hy_port_str}?insecure=1&sni=bing.com${hy_extra}#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://${UUID}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        local tc_port_str=$PORT_TC
+        if [ -n "$HOP_TC" ]; then tc_port_str=$HOP_TC; fi
+        link4="tuic://${UUID}:${PW_TC}@${ip}:${tc_port_str}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
@@ -765,7 +830,6 @@ show_nodes() {
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
     echo -e "\n ${BG_BLUE} Base64 订阅 ${NC} 一键复制以下内容导入客户端:"
-    # [修复8] 修正 echo 的默认换行符，避免 base64 生成末尾多余空节点
     echo -ne "$all_links" | sed '/^$/d' | base64 | tr -d '\n'
     reading "按回车键 (Enter) 返回主菜单..." dummy
 }
