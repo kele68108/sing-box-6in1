@@ -947,7 +947,7 @@ main_menu() {
         printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载\n"
-        printf "   ${RED}[0]${NC}\t🚪 安全退出面板\n"
+        printf "   ${RED}[0]${NC}\t🚪 退出面板\n"
         echo ""
         reading "请输入指令代码" choice
         case $choice in
