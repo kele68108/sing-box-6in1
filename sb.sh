@@ -5,9 +5,9 @@
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
-RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; BLUE='\033[1;34m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'; WHITE='\033[1;37m'
+RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; PURPLE='\033[1;35m'; CYAN='\033[1;36m'
 BG_RED='\033[41;37;1m'; BG_GREEN='\033[42;37;1m'; BG_BLUE='\033[44;37;1m'; BG_PURPLE='\033[45;37;1m'
-BOLD='\033[1m'; UNDERLINE='\033[4m'; NC='\033[0m'
+BOLD='\033[1m'; NC='\033[0m'
 
 msg_info() { echo -e " ${BG_BLUE} INFO ${NC} ${CYAN}$1${NC}"; }
 msg_success() { echo -e " ${BG_GREEN}  OK  ${NC} ${GREEN}$1${NC}"; }
@@ -32,6 +32,46 @@ print_logo() {
 }
 
 # --- 全局变量 ---
+
+# JSON字符串转义（防止用户输入破坏config.json）
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+# URL编码（防止特殊字符污染订阅链接）
+url_encode() {
+    local s="$1"
+    local result=""
+    local i c
+    # IPv6地址含方括号时，保留方括号不编码
+    for ((i=0; i<${#s}; i++)); do
+        c="${s:$i:1}"
+        if [[ "$c" =~ ^[a-zA-Z0-9_.~%-\[\]]+$ ]]; then
+            result+="$c"
+        else
+            result+=$(printf '%%%02X' "'$c")
+        fi
+    done
+    printf '%s' "$result"
+}
+
+# 检测systemd是否支持append语法
+systemd_supports_append() {
+    if command -v systemctl >/dev/null 2>&1; then
+        local ver
+        ver=$(systemd --version 2>/dev/null | head -n1 | grep -oE '[0-9]+' | head -n1)
+        if [ -n "$ver" ] && [ "$ver" -ge 240 ]; then
+            return 0
+        fi
+    fi
+    return 1
+}
 SB_DIR="/etc/sing-box"
 SB_CONF="${SB_DIR}/config.json"
 SB_INFO="${SB_DIR}/install.info"
@@ -112,33 +152,36 @@ EOF
 is_alpine() { [ -f /etc/alpine-release ]; }
 
 svc_action() {
-    local action=$1; local service=$2
+    local action="$1"; local service="$2"
     if is_alpine; then
-        case $action in
-            enable) rc-update add $service default >/dev/null 2>&1 ;;
-            disable) rc-update del $service default >/dev/null 2>&1 ;;
-            start|stop|restart) rc-service $service $action >/dev/null 2>&1 ;;
+        case "$action" in
+            enable) rc-update add "$service" default >/dev/null 2>&1 ;;
+            disable) rc-update del "$service" default >/dev/null 2>&1 ;;
+            start|stop|restart) rc-service "$service" "$action" >/dev/null 2>&1 ;;
             reload) ;;
         esac
     else
-        case $action in
-            enable) systemctl enable --now $service >/dev/null 2>&1 ;;
-            disable) systemctl disable --now $service >/dev/null 2>&1 ;;
-            start|stop|restart) systemctl $action $service >/dev/null 2>&1 ;;
+        case "$action" in
+            enable) systemctl enable --now "$service" >/dev/null 2>&1 ;;
+            disable) systemctl disable --now "$service" >/dev/null 2>&1 ;;
+            start|stop|restart) systemctl "$action" "$service" >/dev/null 2>&1 ;;
             reload) systemctl daemon-reload >/dev/null 2>&1 ;;
         esac
     fi
 }
 
 check_port_usage() {
-    local port=$1; [ -z "$port" ] && return 0
+    local port="$1"; [ -z "$port" ] && return 0
     if command -v lsof >/dev/null 2>&1; then
-        lsof -i :$port >/dev/null 2>&1 && return 1
+        lsof -i "TCP:$port" -sTCP:LISTEN >/dev/null 2>&1 && return 1
+        lsof -i "UDP:$port" >/dev/null 2>&1 && return 1
     fi
     if command -v ss >/dev/null 2>&1; then
-        ss -tuln | grep -q ":$port " && return 1
+        ss -tuln | grep -qE ":[0-9]*$port\>" && return 1
+        ss -uuln | grep -qE ":[0-9]*$port\>" && return 1
     elif command -v netstat >/dev/null 2>&1; then
-        netstat -tuln | grep -q ":$port " && return 1
+        netstat -tuln | grep -qE ":[0-9]*$port\>" && return 1
+        netstat -uuln | grep -qE ":[0-9]*$port\>" && return 1
     fi
     return 0
 }
@@ -221,12 +264,18 @@ get_outbound_ip() {
         ip=$(curl -s6 --max-time 5 ipv6.ip.sb 2>/dev/null); [ -n "$ip" ] && break
         sleep 1
     done
-    [ -z "$ip" ] && ip="127.0.0.1"
+    if [ -z "$ip" ]; then
+        msg_error "无法自动探测公网IP，请确保网络连通或手动指定IP/域名。"
+        echo "127.0.0.1"
+        return 1
+    fi
     echo "$ip"
+    return 0
 }
 
 get_country_prefix() {
-    local cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
+    local cc
+    cc=$(curl -s --max-time 3 http://ip-api.com/line/?fields=countryCode 2>/dev/null)
     [ -z "$cc" ] && cc=$(curl -s --max-time 3 https://ipinfo.io/country 2>/dev/null)
     case "$cc" in
         "CN") echo "🇨🇳中国" ;; "HK") echo "🇭🇰香港" ;; "TW") echo "🇹🇼台湾" ;;
@@ -263,12 +312,20 @@ install_deps() {
         if command -v apt-get >/dev/null 2>&1; then
             apt-get update -y >/dev/null 2>&1
             local apt_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "lsb-release" "iptables")
-            for pkg in "${apt_pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1; done
+            for pkg in "${apt_pkgs[@]}"; do
+                local cmd_name="$pkg"
+                [ "$pkg" = "lsb-release" ] && cmd_name="lsb_release"
+                ! command -v "$cmd_name" >/dev/null 2>&1 && apt-get install -y "$pkg" >/dev/null 2>&1
+            done
         elif command -v yum >/dev/null 2>&1; then
             yum makecache -y >/dev/null 2>&1
             yum install -y epel-release >/dev/null 2>&1
             local yum_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps-ng" "redhat-lsb-core" "iptables")
-            for pkg in "${yum_pkgs[@]}"; do ! command -v "$pkg" >/dev/null 2>&1 && yum install -y "$pkg" >/dev/null 2>&1; done
+            for pkg in "${yum_pkgs[@]}"; do
+                local cmd_name="$pkg"
+                [ "$pkg" = "redhat-lsb-core" ] && cmd_name="lsb_release"
+                ! command -v "$cmd_name" >/dev/null 2>&1 && yum install -y "$pkg" >/dev/null 2>&1
+            done
         else
             msg_error "不支持的包管理器，请手动安装核心依赖。"
             exit 1
@@ -278,9 +335,10 @@ install_deps() {
 }
 
 safe_download() {
-    local url=$1; local dest=$2
-    msg_info "正在下载核心组件: $(basename $dest)..."
-    local http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
+    local url="$1"; local dest="$2"
+    msg_info "正在下载核心组件: $(basename "$dest")..."
+    local http_code
+    http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
     if [ "$http_code" != "200" ]; then msg_error "文件下载失败！"; rm -f "$dest"; return 1; fi
     if [ ! -s "$dest" ]; then msg_error "下载失败！文件为空。"; rm -f "$dest"; return 1; fi
     return 0
@@ -294,8 +352,9 @@ apply_cert() {
     echo -e "\n${BG_BLUE} 证书申请 ${NC} 开始为 ${YELLOW}$domain${NC} 申请 TLS 证书..."
     local standalone_success=false
     if check_port_usage 80; then
-        ~/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256 --force
-        if [ $? -eq 0 ]; then standalone_success=true; fi
+        if ~/.acme.sh/acme.sh --issue -d "$domain" --standalone -k ec-256 --force; then
+            standalone_success=true
+        fi
     else msg_warn "80 端口被占用或不可达，跳过 Standalone 模式。"; fi
 
     if [ "$standalone_success" = false ]; then
@@ -308,8 +367,9 @@ apply_cert() {
         reading "请输入域名的 Zone ID" cf_zone_id; export CF_Zone_ID="$cf_zone_id"
 
         msg_info "API 申请中，请耐心等待 1-2 分钟..."
-        ~/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --force
-        [ $? -ne 0 ] && { msg_error "证书申请彻底失败！"; return 1; }
+        if ! ~/.acme.sh/acme.sh --issue --dns dns_cf -d "$domain" -k ec-256 --force; then
+            msg_error "证书申请彻底失败！"; return 1
+        fi
     fi
 
     mkdir -p "${SB_DIR}"
@@ -321,6 +381,7 @@ apply_cert() {
 
 install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
+        local ARCH S_ARCH TAG
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
         TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name 2>/dev/null)
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
@@ -335,9 +396,27 @@ install_singbox() {
     fi
 }
 
+# 生成Reality密钥对，增加健壮性校验
+generate_reality_keys() {
+    local keys
+    keys=$($SB_BIN generate reality-keypair 2>/dev/null)
+    if [ -z "$keys" ]; then
+        msg_error "sing-box 生成 Reality 密钥对失败，请检查二进制文件是否完整。"
+        return 1
+    fi
+    REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
+    REALITY_PBK=$(echo "$keys" | awk '/PublicKey/ {print $2}')
+    if [ -z "$REALITY_PRK" ] || [ -z "$REALITY_PBK" ]; then
+        msg_error "解析 Reality 密钥失败，输出格式异常：$keys"
+        return 1
+    fi
+    return 0
+}
+
 install_argo() {
     if [ ! -f "$ARGO_BIN" ]; then
-        ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; esac
+        local ARCH A_ARCH
+        ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; *) msg_error "不支持的架构"; return 1 ;; esac
         if safe_download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${A_ARCH}" "$ARGO_BIN"; then
             chmod +x "$ARGO_BIN"
         fi
@@ -349,6 +428,7 @@ install_warp() {
     if ! command -v warp-cli >/dev/null 2>&1; then
         msg_info "正在安装 Cloudflare WARP..."
         if command -v apt-get >/dev/null 2>&1; then
+            mkdir -p /usr/share/keyrings
             curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
             local dist_codename=""
             if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
@@ -367,9 +447,21 @@ install_warp() {
 generate_config() {
     mkdir -p "$SB_DIR"
 
+    # 基础输入安全过滤：禁止JSON破坏性字符进入域名类变量
+    VD_DOMAIN="${VD_DOMAIN//\\/}"; VD_DOMAIN="${VD_DOMAIN//\"/}"
+    REALITY_SNI="${REALITY_SNI//\\/}"; REALITY_SNI="${REALITY_SNI//\"/}"
+    WARP_DOMAINS="${WARP_DOMAINS//\\/}"; WARP_DOMAINS="${WARP_DOMAINS//\"/}"
+
     if [[ "$VD_MODE" != "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
         openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "${SB_DIR}/server.key" -out "${SB_DIR}/server.crt" -subj "/CN=bing.com" -days 3650 >/dev/null 2>&1
         chmod 600 "${SB_DIR}/server.key" "${SB_DIR}/server.crt"
+    fi
+
+    # VD_MODE=3 使用真实域名证书时，若证书缺失则报错
+    if [[ "$VD_MODE" == "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
+        msg_error "VD_MODE=3 需要真实域名证书，但 ${SB_DIR}/server.crt 不存在！"
+        msg_error "请先在协议管理中配置真实域名并申请证书。"
+        return 1
     fi
 
     local rules_json='{"outbound": "direct-out"}'
@@ -444,22 +536,23 @@ apply_iptables() {
     while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
 
     if [ "$ENABLE_HY" == "1" ] && [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ]; then
-        local start_port=$(echo $HY_PORTS | cut -d'-' -f1)
-        local end_port=$(echo $HY_PORTS | cut -d'-' -f2)
+        local start_port end_port
+        start_port=$(echo "$HY_PORTS" | cut -d'-' -f1)
+        end_port=$(echo "$HY_PORTS" | cut -d'-' -f2)
 
         # 核心逻辑：为 TUIC 和 SOCKS5 建立豁免通道，防止被 Hy2 规则强行劫持
         if [ "$ENABLE_TC" == "1" ] && [ -n "$PORT_TC" ]; then
-            iptables -t nat -A PREROUTING -p udp --dport $PORT_TC -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
-            ip6tables -t nat -A PREROUTING -p udp --dport $PORT_TC -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            iptables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
         fi
         if [ "$ENABLE_S5" == "1" ] && [ -n "$PORT_S5" ]; then
-            iptables -t nat -A PREROUTING -p udp --dport $PORT_S5 -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
-            ip6tables -t nat -A PREROUTING -p udp --dport $PORT_S5 -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            iptables -t nat -A PREROUTING -p udp --dport "$PORT_S5" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_S5" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
         fi
 
         # 建立跳跃劫持规则
-        iptables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -m comment --comment "hy2-hopping" -j REDIRECT --to-ports $PORT_HY 2>/dev/null
-        ip6tables -t nat -A PREROUTING -p udp --dport $start_port:$end_port -m comment --comment "hy2-hopping" -j REDIRECT --to-ports $PORT_HY 2>/dev/null
+        iptables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
+        ip6tables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
     fi
 }
 
@@ -468,89 +561,45 @@ setup_services() {
 
     local ARGO_CMD="$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
     if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-        ARGO_CMD="$ARGO_BIN tunnel run --token ${ARGO_TOKEN}"
+        ARGO_CMD="$ARGO_BIN tunnel run --token $(printf '%q' "$ARGO_TOKEN")"
     fi
 
     if is_alpine; then
-        cat > /etc/init.d/sing-box << EOF
+        cat > /etc/init.d/sing-box << 'RCINIT'
 #!/sbin/openrc-run
-command="$SB_BIN"
-command_args="run -c $SB_CONF"
+command="SB_BIN_PLACEHOLDER"
+command_args="run -c SB_CONF_PLACEHOLDER"
 command_background=true
 pidfile="/var/run/sing-box.pid"
 output_log="/var/log/sing-box.log"
 error_log="/var/log/sing-box.log"
-EOF
-        cat > /etc/init.d/sb-argo << EOF
+RCINIT
+        sed -i "s|SB_BIN_PLACEHOLDER|$SB_BIN|g; s|SB_CONF_PLACEHOLDER|$SB_CONF|g" /etc/init.d/sing-box
+
+        cat > /etc/init.d/sb-argo << 'RCINIT'
 #!/sbin/openrc-run
-command="$ARGO_BIN"
-command_args="tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
+command="ARGO_BIN_PLACEHOLDER"
+command_args="ARGO_CMD_PLACEHOLDER"
 command_background=true
 pidfile="/var/run/sb-argo.pid"
 output_log="/var/log/sb-argo.log"
 error_log="/var/log/sb-argo.log"
-EOF
-        if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-            cat > /etc/init.d/sb-argo << EOF
-#!/sbin/openrc-run
-command="$ARGO_BIN"
-command_args="tunnel run --token $ARGO_TOKEN"
-command_background=true
-pidfile="/var/run/sb-argo.pid"
-output_log="/var/log/sb-argo.log"
-error_log="/var/log/sb-argo.log"
-EOF
-        fi
+RCINIT
+        local _argo_args="${ARGO_CMD#* }"
+        sed -i "s|ARGO_BIN_PLACEHOLDER|$ARGO_BIN|g; s|ARGO_CMD_PLACEHOLDER|$_argo_args|g" /etc/init.d/sb-argo
         chmod +x /etc/init.d/sing-box /etc/init.d/sb-argo
     else
-        cat > /etc/systemd/system/sing-box.service << EOF
-[Unit]
-Description=Sing-box Core Service
-After=network.target
-[Service]
-ExecStart=$SB_BIN run -c $SB_CONF
-Restart=always
-RestartSec=3
-StartLimitInterval=0
-LimitNOFILE=1048576
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$SB_LOG
-StandardError=append:$SB_LOG
-[Install]
-WantedBy=multi-user.target
-EOF
-        if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
-            cat > /etc/systemd/system/sb-argo.service << EOF
-[Unit]
-Description=Argo Tunnel for Sing-box
-After=network.target
-[Service]
-ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto
-Restart=always
-RestartSec=3
-StartLimitInterval=0
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$ARGO_LOG
-StandardError=append:$ARGO_LOG
-[Install]
-WantedBy=multi-user.target
-EOF
+        local std_out_err
+        if systemd_supports_append; then
+            std_out_err="StandardOutput=append:$SB_LOG\nStandardError=append:$SB_LOG"
         else
-            cat > /etc/systemd/system/sb-argo.service << EOF
-[Unit]
-Description=Argo Tunnel for Sing-box
-After=network.target
-[Service]
-ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN
-Restart=always
-RestartSec=3
-StartLimitInterval=0
-WorkingDirectory=$SB_DIR
-StandardOutput=append:$ARGO_LOG
-StandardError=append:$ARGO_LOG
-[Install]
-WantedBy=multi-user.target
-EOF
+            std_out_err="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"
+        fi
+        printf '%s\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
+        if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
+            printf '%s\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
+        else
+            printf '%s\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
         fi
         svc_action reload
     fi
@@ -593,9 +642,10 @@ install_fast() {
     PORT_TC=$(get_random_port); PORT_S5=$(get_random_port)
 
     msg_info "正在生成 Reality 专属密钥对..."
-    local keys=$($SB_BIN generate reality-keypair)
-    REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
-    REALITY_PBK=$(echo "$keys" | awk '/PublicKey/ {print $2}')
+    if ! generate_reality_keys; then
+        msg_error "Reality 密钥生成失败，安装中止。"
+        exit 1
+    fi
     REALITY_SHORT_ID=$(openssl rand -hex 8)
     REALITY_SNI="www.microsoft.com"
 
@@ -604,7 +654,11 @@ install_fast() {
     HY_HOPPING="0"; HY_PORTS=""
 
     msg_info "正在写入底层架构并启动守护进程..."
-    generate_config; setup_services
+    if ! generate_config; then
+        msg_error "配置生成失败，部署中止。"
+        exit 1
+    fi
+    setup_services
     echo ""; msg_success "一键部署已完成！"; sleep 2
 }
 
@@ -638,9 +692,10 @@ install_custom() {
         ask_port "Reality 外网端口 (建议443，回车随机)" PORT_RE
         if [ -z "$PORT_RE" ]; then PORT_RE=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Reality 端口: ${GREEN}$PORT_RE${NC}"; fi
         msg_info "正在生成 Reality 密钥对..."
-        local keys=$($SB_BIN generate reality-keypair)
-        REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
-        REALITY_PBK=$(echo "$keys" | awk '/PublicKey/ {print $2}')
+        if ! generate_reality_keys; then
+            msg_error "Reality 密钥生成失败，安装中止。"
+            exit 1
+        fi
         REALITY_SHORT_ID=$(openssl rand -hex 8)
         REALITY_SNI="www.microsoft.com"
     fi
@@ -667,7 +722,11 @@ install_custom() {
     WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
 
     echo ""; msg_info "正在写入底层架构并启动守护进程..."
-    generate_config; setup_services
+    if ! generate_config; then
+        msg_error "配置生成失败，部署中止。"
+        exit 1
+    fi
+    setup_services
     echo ""; msg_success "自定义部署已完成！"; sleep 2
 }
 
@@ -677,15 +736,15 @@ manage_protocols() {
     while true; do
         print_logo
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && printf "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}\n"
-        [ "$ENABLE_RE" == "1" ] && printf "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}\n"
-        [ "$ENABLE_HY" == "1" ] && printf "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}\n"
-        [ "$ENABLE_TC" == "1" ] && printf "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}\n"
-        [ "$ENABLE_S5" == "1" ] && printf "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}\n"
-        [ "$ENABLE_ARGO" == "1" ] && printf "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}\n"
+        [ "$ENABLE_VD" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
+        [ "$ENABLE_RE" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
+        [ "$ENABLE_HY" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
+        [ "$ENABLE_TC" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}"
+        [ "$ENABLE_S5" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}"
+        [ "$ENABLE_ARGO" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        printf "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}\n"
-        printf "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}\n"
+        printf '%s\n' "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}"
+        printf '%s\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
         reading "请选择操作 [0-7]" choice
         case $choice in
@@ -706,7 +765,15 @@ manage_protocols() {
                 reading "模式选择 [1-3]" vm
                 if [ "$vm" == "3" ]; then
                     reading "请输入已解析到此VPS的真实域名" vd
-                    if [ -n "$vd" ]; then apply_cert "$vd"; if [ $? -eq 0 ]; then VD_MODE="3"; VD_DOMAIN="$vd"; else msg_error "获取失败，放弃修改。"; fi; else msg_warn "操作取消。"; fi
+                    if [ -n "$vd" ]; then
+                        if apply_cert "$vd"; then
+                            VD_MODE="3"; VD_DOMAIN="$vd"
+                        else
+                            msg_error "获取失败，放弃修改。"
+                        fi
+                    else
+                        msg_warn "操作取消。"
+                    fi
                 elif [[ "$vm" == "1" || "$vm" == "2" ]]; then VD_MODE=$vm; VD_DOMAIN=""; fi
                 ;;
             2)
@@ -720,7 +787,8 @@ manage_protocols() {
                 ask_port "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p
                 reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw
                 
-                local current_hop_str=$([ "$HY_HOPPING" == "1" ] && echo "已开启 (${HY_PORTS})" || echo "未开启")
+                local current_hop_str
+                current_hop_str=$([ "$HY_HOPPING" == "1" ] && echo "已开启 (${HY_PORTS})" || echo "未开启")
                 reading "是否开启端口跳跃 (Port Hopping)? [y/n] (默认 n, 当前状态: $current_hop_str)" ph
                 ph=${ph,,}
                 if [[ "$ph" == "y" ]]; then
@@ -772,7 +840,12 @@ manage_protocols() {
             *) continue ;;
         esac
         msg_info "正在热重载内核配置..."
-        generate_config; setup_services
+        if ! generate_config; then
+            msg_error "配置重载失败，请检查日志。"
+            sleep 1
+            continue
+        fi
+        setup_services
         msg_success "配置热重载完成！"; sleep 1
     done
 }
@@ -792,11 +865,11 @@ manage_warp() {
         [ "$WARP_MODE" == "3" ] && echo -e "${PURPLE}┃${NC} 分流名单: ${YELLOW}${WARP_DOMAINS:-无}${NC}"
         [ "$WARP_MODE" == "3" ] && [ -z "$WARP_DOMAINS" ] && echo -e "${PURPLE}┃${NC} ${RED}⚠ 当前分流模式未指定任何域名，流量将全部直连。${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        printf "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式\n"
-        printf "${PURPLE}┃${NC}  [2]\t➕ 追加目标分流域名\n"
-        printf "${PURPLE}┃${NC}  [3]\t➖ 移除指定分流域名\n"
-        printf "${PURPLE}┃${NC}  [4]\t🗑️ 清空所有分流名单\n"
-        printf "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单\n"
+        printf '%s\n' "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式"
+        printf '%s\n' "${PURPLE}┃${NC}  [2]\t➕ 追加目标分流域名"
+        printf '%s\n' "${PURPLE}┃${NC}  [3]\t➖ 移除指定分流域名"
+        printf '%s\n' "${PURPLE}┃${NC}  [4]\t🗑️ 清空所有分流名单"
+        printf '%s\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
         reading "请选择操作 [0-4]" choice
@@ -832,23 +905,24 @@ show_nodes() {
 
     echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
+    local link_re link1 link2 link3 link4 link5
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://${UUID_RE}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
+        link_re="vless://$(url_encode "$UUID_RE")@$(url_encode "$ip"):$PORT_RE?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$(url_encode "${REALITY_SNI}")&fp=chrome&pbk=$(url_encode "${REALITY_PBK}")&sid=$(url_encode "${REALITY_SHORT_ID}")&type=tcp#$(url_encode "${NODE_PREFIX}-REALITY")"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
-            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
+            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$ip"):$PORT_VD?encryption=none&security=none&type=ws&path=%2Fws#$(url_encode "${NODE_PREFIX}-VLESS")"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
-            link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
+            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$VD_DOMAIN"):$PORT_VD?encryption=none&security=tls&sni=$(url_encode "${VD_DOMAIN}")&type=ws&host=$(url_encode "${VD_DOMAIN}")&path=%2Fws#$(url_encode "${NODE_PREFIX}-VLESS")"
         else
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
+            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$ip"):$PORT_VD?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#$(url_encode "${NODE_PREFIX}-VLESS")"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -869,7 +943,7 @@ show_nodes() {
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
         if [ -n "$argo_domain" ]; then
-            link2="vless://${UUID_ARGO}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo&allowInsecure=1#${NODE_PREFIX}-ARGO"
+            link2="vless://$(url_encode "$UUID_ARGO")@www.visa.com.sg:443?encryption=none&security=tls&sni=$(url_encode "${argo_domain}")&type=ws&host=$(url_encode "${argo_domain}")&path=%2Fargo&allowInsecure=1#$(url_encode "${NODE_PREFIX}-ARGO")"
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
     fi
@@ -877,23 +951,24 @@ show_nodes() {
     if [ "$ENABLE_HY" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         local mport_suffix=""
-        [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=${HY_PORTS}"
+        [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=$(url_encode "${HY_PORTS}")"
         
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${mport_suffix}#${NODE_PREFIX}-HY2"
+        link3="hysteria2://$(url_encode "$PW_HY")@$(url_encode "$ip"):$PORT_HY?insecure=1&sni=bing.com${mport_suffix}#$(url_encode "${NODE_PREFIX}-HY2")"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        link4="tuic://$(url_encode "$UUID_TC"):$(url_encode "$PW_TC")@$(url_encode "$ip"):$PORT_TC?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#$(url_encode "${NODE_PREFIX}-TUIC")"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🛡️  ${GREEN}[SOCKS5]${NC} (基础代理)"
-        local cred="${S5_U}:${S5_P}"; local b64_cred=$(echo -n "$cred" | base64 -w0)
-        link5="socks://${b64_cred}@${ip}:${PORT_S5}#${NODE_PREFIX}-SOCKS5"
+        local cred="${S5_U}:${S5_P}" b64_cred
+        b64_cred=$(echo -n "$cred" | base64 -w0 2>/dev/null || echo -n "$cred" | base64)
+        link5="socks://${b64_cred}@$(url_encode "$ip"):$PORT_S5#$(url_encode "${NODE_PREFIX}-SOCKS5")"
         echo -e "${CYAN}┃${NC}    ${link5}"; all_links+="$link5\n"
     fi
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
@@ -929,6 +1004,10 @@ uninstall_script() {
         elif command -v yum >/dev/null 2>&1; then yum remove -y cloudflare-warp >/dev/null 2>&1; fi
     fi
 
+    # 清理 sysctl 优化配置
+    rm -f /etc/sysctl.d/99-singbox-optimize.conf
+    sysctl --system >/dev/null 2>&1 || true
+
     # 此处已删除 ! -name "sub.txt" 的限制，实现彻底销毁
     find "$SB_DIR" -type f -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
@@ -943,15 +1022,15 @@ main_menu() {
 
         echo -e "   系统状态: $status"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎\n"
-        printf "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎\n"
-        printf "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书/停用)\n"
-        printf "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)\n"
-        printf "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接\n"
+        printf '%s\n' "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎"
+        printf '%s\n' "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎"
+        printf '%s\n' "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书/停用)"
+        printf '%s\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
+        printf '%s\n' "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         # 卸载菜单文字已更新，提示会清理所有数据
-        printf "   ${RED}[9]${NC}\t🗑️ 彻底卸载\n"
-        printf "   ${RED}[0]${NC}\t🚪 退出面板\n"
+        printf '%s\n' "   ${RED}[9]${NC}\t🗑️ 彻底卸载"
+        printf '%s\n' "   ${RED}[0]${NC}\t🚪 退出面板"
         echo ""
         reading "请输入指令代码" choice
         case $choice in
