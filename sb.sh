@@ -909,20 +909,20 @@ show_nodes() {
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://$(url_encode "$UUID_RE")@$(url_encode "$ip"):$PORT_RE?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$(url_encode "${REALITY_SNI}")&fp=chrome&pbk=$(url_encode "${REALITY_PBK}")&sid=$(url_encode "${REALITY_SHORT_ID}")&type=tcp#$(url_encode "${NODE_PREFIX}-REALITY")"
+        link_re="vless://${UUID_RE}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
-            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$ip"):$PORT_VD?encryption=none&security=none&type=ws&path=%2Fws#$(url_encode "${NODE_PREFIX}-VLESS")"
+            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
         elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
-            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$VD_DOMAIN"):$PORT_VD?encryption=none&security=tls&sni=$(url_encode "${VD_DOMAIN}")&type=ws&host=$(url_encode "${VD_DOMAIN}")&path=%2Fws#$(url_encode "${NODE_PREFIX}-VLESS")"
+            link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
         else
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://$(url_encode "$UUID_VD")@$(url_encode "$ip"):$PORT_VD?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#$(url_encode "${NODE_PREFIX}-VLESS")"
+            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -943,7 +943,7 @@ show_nodes() {
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
         if [ -n "$argo_domain" ]; then
-            link2="vless://$(url_encode "$UUID_ARGO")@www.visa.com.sg:443?encryption=none&security=tls&sni=$(url_encode "${argo_domain}")&type=ws&host=$(url_encode "${argo_domain}")&path=%2Fargo&allowInsecure=1#$(url_encode "${NODE_PREFIX}-ARGO")"
+            link2="vless://${UUID_ARGO}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo&allowInsecure=1#${NODE_PREFIX}-ARGO"
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
     fi
@@ -951,16 +951,16 @@ show_nodes() {
     if [ "$ENABLE_HY" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         local mport_suffix=""
-        [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=$(url_encode "${HY_PORTS}")"
+        [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=${HY_PORTS}"
         
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://$(url_encode "$PW_HY")@$(url_encode "$ip"):$PORT_HY?insecure=1&sni=bing.com${mport_suffix}#$(url_encode "${NODE_PREFIX}-HY2")"
+        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${mport_suffix}#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://$(url_encode "$UUID_TC"):$(url_encode "$PW_TC")@$(url_encode "$ip"):$PORT_TC?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#$(url_encode "${NODE_PREFIX}-TUIC")"
+        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
@@ -968,7 +968,7 @@ show_nodes() {
         echo -e "${CYAN}┃${NC} 🛡️  ${GREEN}[SOCKS5]${NC} (基础代理)"
         local cred="${S5_U}:${S5_P}" b64_cred
         b64_cred=$(echo -n "$cred" | base64 -w0 2>/dev/null || echo -n "$cred" | base64)
-        link5="socks://${b64_cred}@$(url_encode "$ip"):$PORT_S5#$(url_encode "${NODE_PREFIX}-SOCKS5")"
+        link5="socks://${b64_cred}@${ip}:${PORT_S5}#${NODE_PREFIX}-SOCKS5"
         echo -e "${CYAN}┃${NC}    ${link5}"; all_links+="$link5\n"
     fi
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
