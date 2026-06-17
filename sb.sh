@@ -595,11 +595,11 @@ RCINIT
         else
             std_out_err="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"
         fi
-        printf '%s\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
+        printf '%b\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
         if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
-            printf '%s\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
+            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
         else
-            printf '%s\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
+            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
         fi
         svc_action reload
     fi
@@ -736,15 +736,15 @@ manage_protocols() {
     while true; do
         print_logo
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
-        [ "$ENABLE_RE" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
-        [ "$ENABLE_HY" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
-        [ "$ENABLE_TC" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}"
-        [ "$ENABLE_S5" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}"
-        [ "$ENABLE_ARGO" == "1" ] && printf '%s\n' "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
+        [ "$ENABLE_VD" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
+        [ "$ENABLE_RE" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
+        [ "$ENABLE_HY" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
+        [ "$ENABLE_TC" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}"
+        [ "$ENABLE_S5" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}"
+        [ "$ENABLE_ARGO" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        printf '%s\n' "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}"
-        printf '%s\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}"
+        printf '%b\n' "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}"
+        printf '%b\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
         reading "请选择操作 [0-7]" choice
         case $choice in
@@ -865,11 +865,11 @@ manage_warp() {
         [ "$WARP_MODE" == "3" ] && echo -e "${PURPLE}┃${NC} 分流名单: ${YELLOW}${WARP_DOMAINS:-无}${NC}"
         [ "$WARP_MODE" == "3" ] && [ -z "$WARP_DOMAINS" ] && echo -e "${PURPLE}┃${NC} ${RED}⚠ 当前分流模式未指定任何域名，流量将全部直连。${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        printf '%s\n' "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式"
-        printf '%s\n' "${PURPLE}┃${NC}  [2]\t➕ 追加目标分流域名"
-        printf '%s\n' "${PURPLE}┃${NC}  [3]\t➖ 移除指定分流域名"
-        printf '%s\n' "${PURPLE}┃${NC}  [4]\t🗑️ 清空所有分流名单"
-        printf '%s\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单"
+        printf '%b\n' "${PURPLE}┃${NC}  [1]\t🔄 切换 WARP 工作模式"
+        printf '%b\n' "${PURPLE}┃${NC}  [2]\t➕ 追加目标分流域名"
+        printf '%b\n' "${PURPLE}┃${NC}  [3]\t➖ 移除指定分流域名"
+        printf '%b\n' "${PURPLE}┃${NC}  [4]\t🗑️ 清空所有分流名单"
+        printf '%b\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
         reading "请选择操作 [0-4]" choice
@@ -1022,15 +1022,15 @@ main_menu() {
 
         echo -e "   系统状态: $status"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf '%s\n' "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎"
-        printf '%s\n' "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎"
-        printf '%s\n' "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书/停用)"
-        printf '%s\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
-        printf '%s\n' "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接"
+        printf '%b\n' "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎"
+        printf '%b\n' "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎"
+        printf '%b\n' "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书/停用)"
+        printf '%b\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
+        printf '%b\n' "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
         # 卸载菜单文字已更新，提示会清理所有数据
-        printf '%s\n' "   ${RED}[9]${NC}\t🗑️ 彻底卸载"
-        printf '%s\n' "   ${RED}[0]${NC}\t🚪 退出面板"
+        printf '%b\n' "   ${RED}[9]${NC}\t🗑️ 彻底卸载"
+        printf '%b\n' "   ${RED}[0]${NC}\t🚪 退出面板"
         echo ""
         reading "请输入指令代码" choice
         case $choice in
