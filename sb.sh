@@ -571,10 +571,10 @@ command="SB_BIN_PLACEHOLDER"
 command_args="run -c SB_CONF_PLACEHOLDER"
 command_background=true
 pidfile="/var/run/sing-box.pid"
-output_log="/var/log/sing-box.log"
-error_log="/var/log/sing-box.log"
+output_log="SB_LOG_PLACEHOLDER"
+error_log="SB_LOG_PLACEHOLDER"
 RCINIT
-        sed -i "s|SB_BIN_PLACEHOLDER|$SB_BIN|g; s|SB_CONF_PLACEHOLDER|$SB_CONF|g" /etc/init.d/sing-box
+        sed -i "s|SB_BIN_PLACEHOLDER|$SB_BIN|g; s|SB_CONF_PLACEHOLDER|$SB_CONF|g; s|SB_LOG_PLACEHOLDER|$SB_LOG|g" /etc/init.d/sing-box
 
         cat > /etc/init.d/sb-argo << 'RCINIT'
 #!/sbin/openrc-run
@@ -582,24 +582,26 @@ command="ARGO_BIN_PLACEHOLDER"
 command_args="ARGO_CMD_PLACEHOLDER"
 command_background=true
 pidfile="/var/run/sb-argo.pid"
-output_log="/var/log/sb-argo.log"
-error_log="/var/log/sb-argo.log"
+output_log="ARGO_LOG_PLACEHOLDER"
+error_log="ARGO_LOG_PLACEHOLDER"
 RCINIT
         local _argo_args="${ARGO_CMD#* }"
-        sed -i "s|ARGO_BIN_PLACEHOLDER|$ARGO_BIN|g; s|ARGO_CMD_PLACEHOLDER|$_argo_args|g" /etc/init.d/sb-argo
+        sed -i "s|ARGO_BIN_PLACEHOLDER|$ARGO_BIN|g; s|ARGO_CMD_PLACEHOLDER|$_argo_args|g; s|ARGO_LOG_PLACEHOLDER|$ARGO_LOG|g" /etc/init.d/sb-argo
         chmod +x /etc/init.d/sing-box /etc/init.d/sb-argo
     else
-        local std_out_err
+        local sb_std argo_std
         if systemd_supports_append; then
-            std_out_err="StandardOutput=append:$SB_LOG\nStandardError=append:$SB_LOG"
+            sb_std="StandardOutput=append:$SB_LOG\nStandardError=append:$SB_LOG"
+            argo_std="StandardOutput=append:$ARGO_LOG\nStandardError=append:$ARGO_LOG"
         else
-            std_out_err="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"
+            sb_std="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"
+            argo_std="StandardOutput=file:$ARGO_LOG\nStandardError=file:$ARGO_LOG"
         fi
-        printf '%b\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
+        printf '%b\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$sb_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
         if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
-            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
+            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$argo_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
         else
-            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$std_out_err" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
+            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$argo_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
         fi
         svc_action reload
     fi
@@ -930,7 +932,7 @@ show_nodes() {
     if [ "$ENABLE_ARGO" == "1" ]; then
         local argo_domain=""
         if [ "$ARGO_MODE" == "temp" ]; then
-            for i in {1..10}; do
+            for i in $(seq 1 10); do
                 [ -f "$ARGO_LOG" ] && argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | tail -n 1 | sed 's/https:\/\///')
                 [ -n "$argo_domain" ] && break
                 sleep 2
