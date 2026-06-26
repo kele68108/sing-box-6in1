@@ -383,11 +383,13 @@ install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
         local ARCH S_ARCH TAG
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
-        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r .tag_name 2>/dev/null)
+        # 获取最新 release（包括 alpha/pre-release）
+        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '.[0].tag_name' 2>/dev/null)
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
-            TAG=$(curl -sL https://github.com/SagerNet/sing-box/releases/latest | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | head -n 1)
-            [ -z "$TAG" ] && TAG="v1.9.3"
+            TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' 2>/dev/null)
+            [ -z "$TAG" ] || [ "$TAG" == "null" ] && TAG="v1.9.3"
         fi
+        msg_info "正在下载 sing-box ${TAG} (最新版/alpha)..."
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
             tar -xzf sb.tar.gz || { msg_error "解压失败"; exit 1; }
             mv sing-box-*/sing-box "$SB_BIN"; rm -rf sb.tar.gz sing-box-*
@@ -480,7 +482,7 @@ generate_config() {
     fi
 
     if [ "$ENABLE_RE" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID_RE\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"$REALITY_SHORT_ID\" ] } } },"
+        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID_RE\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"\" ] } } },"
     fi
 
     if [ "$ENABLE_VD" == "1" ]; then
@@ -648,8 +650,8 @@ install_fast() {
         msg_error "Reality 密钥生成失败，安装中止。"
         exit 1
     fi
-    REALITY_SHORT_ID=$(openssl rand -hex 8)
-    REALITY_SNI="www.microsoft.com"
+    REALITY_SHORT_ID=""
+    REALITY_SNI="addons.mozilla.org"
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
     WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
@@ -698,8 +700,8 @@ install_custom() {
             msg_error "Reality 密钥生成失败，安装中止。"
             exit 1
         fi
-        REALITY_SHORT_ID=$(openssl rand -hex 8)
-        REALITY_SNI="www.microsoft.com"
+        REALITY_SHORT_ID=""
+        REALITY_SNI="addons.mozilla.org"
     fi
     if [ "$ENABLE_HY" == "1" ]; then
         ask_port "Hysteria2 外网端口 (回车随机)" PORT_HY
@@ -908,10 +910,15 @@ show_nodes() {
     echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
     local link_re link1 link2 link3 link4 link5
+    # 计算自签证书 SHA256 指纹，用于替代 allowInsecure
+    local CERT_FP=""
+    if [ -f "${SB_DIR}/server.crt" ]; then
+        CERT_FP=$(openssl x509 -fingerprint -sha256 -noout -in "${SB_DIR}/server.crt" 2>/dev/null | awk -F'=' '{print $NF}' | tr -d ':')
+    fi
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
-        link_re="vless://${UUID_RE}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&sid=${REALITY_SHORT_ID}&type=tcp#${NODE_PREFIX}-REALITY"
+        link_re="vless://${UUID_RE}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&type=tcp#${NODE_PREFIX}-REALITY"
         echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
     fi
 
@@ -924,7 +931,7 @@ show_nodes() {
             link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
         else
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
+            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&pinnedPeerCertSha256=${CERT_FP}#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -945,7 +952,7 @@ show_nodes() {
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
         if [ -n "$argo_domain" ]; then
-            link2="vless://${UUID_ARGO}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo&allowInsecure=1#${NODE_PREFIX}-ARGO"
+            link2="vless://${UUID_ARGO}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo#${NODE_PREFIX}-ARGO"
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
     fi
@@ -956,13 +963,13 @@ show_nodes() {
         [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=${HY_PORTS}"
         
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${mport_suffix}#${NODE_PREFIX}-HY2"
+        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?sni=bing.com&pinnedPeerCertSha256=${CERT_FP}${mport_suffix}#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&pinnedPeerCertSha256=${CERT_FP}#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
