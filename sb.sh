@@ -100,6 +100,14 @@ load_config() {
     [ -f "$SB_INFO" ] && source "$SB_INFO"
     [ -z "$VD_MODE" ] && VD_MODE="2"
     [ -z "$VD_DOMAIN" ] && VD_DOMAIN=""
+    # 模式迁移：自签证书已被内核弃用跳过证书检测能力，迁移老配置
+    # 旧 VD_MODE=2 表示"自签伪装"，如今 = mode 1 (关闭 TLS)
+    # 旧 VD_MODE=3 表示"真实证书"，合并到新 mode 2
+    if [ "$VD_MODE" == "2" ] && [ -z "$VD_DOMAIN" ]; then
+        VD_MODE="1"
+    elif [ "$VD_MODE" == "3" ]; then
+        VD_MODE="2"
+    fi
     [ -z "$ENABLE_VD" ] && ENABLE_VD="1"
     [ -z "$ENABLE_RE" ] && ENABLE_RE="1"
     [ -z "$ENABLE_HY" ] && ENABLE_HY="1"
@@ -383,13 +391,13 @@ install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
         local ARCH S_ARCH TAG
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
-        # 获取最新 release（包括 alpha/pre-release）
-        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '.[0].tag_name' 2>/dev/null)
+        # 仅拉取最新 stable 版（过滤 prerelease == true），避免使用 alpha 内核
+        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" | jq -r '.[] | select(.prerelease == false) | .tag_name' 2>/dev/null | head -n 1)
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
             TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' 2>/dev/null)
-            [ -z "$TAG" ] || [ "$TAG" == "null" ] && TAG="v1.9.3"
+            [ -z "$TAG" ] || [ "$TAG" == "null" ] && TAG="v1.11.5"
         fi
-        msg_info "正在下载 sing-box ${TAG} (最新版/alpha)..."
+        msg_info "正在下载 sing-box ${TAG} (最新稳定版)..."
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
             tar -xzf sb.tar.gz || { msg_error "解压失败"; exit 1; }
             mv sing-box-*/sing-box "$SB_BIN"; rm -rf sb.tar.gz sing-box-*
@@ -454,16 +462,23 @@ generate_config() {
     REALITY_SNI="${REALITY_SNI//\\/}"; REALITY_SNI="${REALITY_SNI//\"/}"
     WARP_DOMAINS="${WARP_DOMAINS//\\/}"; WARP_DOMAINS="${WARP_DOMAINS//\"/}"
 
-    if [[ "$VD_MODE" != "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
-        openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "${SB_DIR}/server.key" -out "${SB_DIR}/server.crt" -subj "/CN=bing.com" -days 3650 >/dev/null 2>&1
-        chmod 600 "${SB_DIR}/server.key" "${SB_DIR}/server.crt"
-    fi
-
-    # VD_MODE=3 使用真实域名证书时，若证书缺失则报错
-    if [[ "$VD_MODE" == "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
-        msg_error "VD_MODE=3 需要真实域名证书，但 ${SB_DIR}/server.crt 不存在！"
-        msg_error "请先在协议管理中配置真实域名并申请证书。"
-        return 1
+    # 强制证书检查：任何 TLS 协议都依赖真实证书（自签已被内核弃用跳过证书检测能力后不可用）
+    local needs_tls=false
+    [ "$ENABLE_VD" == "1" ] && [ "$VD_MODE" != "1" ] && needs_tls=true
+    [ "$ENABLE_HY" == "1" ] && needs_tls=true
+    [ "$ENABLE_TC" == "1" ] && needs_tls=true
+    if [ "$needs_tls" == "true" ] && [ ! -f "${SB_DIR}/server.crt" ]; then
+        if [ -n "$VD_DOMAIN" ]; then
+            msg_warn "检测到证书缺失，正在为 ${VD_DOMAIN} 自动申请一次..."
+            if ! apply_cert "$VD_DOMAIN"; then
+                msg_error "证书申请失败，无法继续！"
+                return 1
+            fi
+        else
+            msg_error "需要真实域名证书，但 ${SB_DIR}/server.crt 不存在！"
+            msg_error "请先在协议管理中填入域名并申请证书。"
+            return 1
+        fi
     fi
 
     local rules_json='{"outbound": "direct-out"}'
@@ -488,10 +503,12 @@ generate_config() {
     if [ "$ENABLE_VD" == "1" ]; then
         if [ "$VD_MODE" == "1" ]; then
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
-        elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
+        elif [ "$VD_MODE" == "2" ] && [ -n "$VD_DOMAIN" ]; then
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         else
-            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+            msg_error "VLESS-WS TLS 模式 (VD_MODE=$VD_MODE) 配置异常：开启 TLS 必须先填入域名并申请证书！"
+            msg_error "请到 \033[1;33m协议管理 → [1] 修改 VLESS\033[0m 选择 [2] 申请真实证书。"
+            return 1
         fi
     fi
 
@@ -634,6 +651,24 @@ install_fast() {
 
     install_deps; install_singbox; install_argo
 
+    # 强制要求真实域名证书（内核已弃用跳过证书检测，自签证书不再可用）
+    echo -e "\n${BG_RED} 强制证书 ${NC} ${RED}脚本强制要求使用真实域名证书！${NC}"
+    msg_warn "sing-box 等主流内核即将弃用\"跳过证书检测\"功能，自签证书已不可用，必须先申请真实证书。"
+    echo ""
+    while true; do
+        reading "请输入一个已解析到此 VPS 的真实域名 (例如: vpn.example.com)" vd_input
+        if [ -z "$vd_input" ]; then
+            msg_error "域名不能为空，已取消一键部署。"
+            return 1
+        fi
+        VD_DOMAIN="$vd_input"
+        if apply_cert "$VD_DOMAIN"; then
+            echo -e "  ${GREEN}➤ 已为 ${VD_DOMAIN} 申请并部署证书${NC}"
+            break
+        fi
+        msg_warn "证书申请失败，请重新输入域名或检查 DNS 解析后重试。"
+    done
+
     UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
     UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
     PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
@@ -654,7 +689,8 @@ install_fast() {
     REALITY_SNI="addons.mozilla.org"
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
+    WARP_MODE="1"; WARP_DOMAINS=""
+    VD_MODE="2"  # 一键部署：直接使用上面已申请的证书
     HY_HOPPING="0"; HY_PORTS=""
 
     msg_info "正在写入底层架构并启动守护进程..."
@@ -672,6 +708,24 @@ install_custom() {
     check_existing || return
 
     install_deps; install_singbox; install_argo
+
+    # 强制要求真实域名证书（内核已弃用跳过证书检测，自签证书不再可用）
+    echo -e "\n${BG_RED} 强制证书 ${NC} ${RED}脚本强制要求使用真实域名证书！${NC}"
+    msg_warn "sing-box 等主流内核即将弃用\"跳过证书检测\"功能，自签证书已不可用，必须先申请真实证书。"
+    echo ""
+    while true; do
+        reading "请输入一个已解析到此 VPS 的真实域名 (例如: vpn.example.com)" vd_input
+        if [ -z "$vd_input" ]; then
+            msg_error "域名不能为空，已取消自定义部署。"
+            return 1
+        fi
+        VD_DOMAIN="$vd_input"
+        if apply_cert "$VD_DOMAIN"; then
+            echo -e "  ${GREEN}➤ 已为 ${VD_DOMAIN} 申请并部署证书${NC}"
+            break
+        fi
+        msg_warn "证书申请失败，请重新输入域名或检查 DNS 解析后重试。"
+    done
 
     UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
     UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
@@ -723,7 +777,8 @@ install_custom() {
     fi
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
+    WARP_MODE="1"; WARP_DOMAINS=""
+    VD_MODE="2"  # 自定义部署：使用流程开头已申请的证书域名
 
     echo ""; msg_info "正在写入底层架构并启动守护进程..."
     if ! generate_config; then
@@ -758,27 +813,25 @@ manage_protocols() {
                 ask_uuid "新 VLESS 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_VD=$u
                 
                 local current_vd_mode_str="关闭 TLS (纯普通直连)"
-                [ "$VD_MODE" == "2" ] && current_vd_mode_str="开启 TLS (自签伪装证书)"
-                [ "$VD_MODE" == "3" ] && current_vd_mode_str="开启 TLS (真实域名证书: $VD_DOMAIN)"
+                [ "$VD_MODE" == "2" ] && current_vd_mode_str="开启 TLS (真实证书: ${VD_DOMAIN:-未配置})"
 
                 echo -e "\n  ${YELLOW}当前 VLESS 模式: ${GREEN}${current_vd_mode_str}${NC}"
                 echo -e "  ${YELLOW}请选择新的 VLESS 模式 (直接回车保持不变)：${NC}"
                 echo -e "  [1] 关闭 TLS (纯普通直连)"
-                echo -e "  [2] 开启 TLS (自签伪装证书)"
-                echo -e "  [3] 开启 TLS (申请真实域名证书)"
-                reading "模式选择 [1-3]" vm
-                if [ "$vm" == "3" ]; then
+                echo -e "  [2] 开启 TLS (申请真实域名证书)"
+                reading "模式选择 [1-2]" vm
+                if [ "$vm" == "2" ]; then
                     reading "请输入已解析到此VPS的真实域名" vd
                     if [ -n "$vd" ]; then
                         if apply_cert "$vd"; then
-                            VD_MODE="3"; VD_DOMAIN="$vd"
+                            VD_MODE="2"; VD_DOMAIN="$vd"
                         else
                             msg_error "获取失败，放弃修改。"
                         fi
                     else
                         msg_warn "操作取消。"
                     fi
-                elif [[ "$vm" == "1" || "$vm" == "2" ]]; then VD_MODE=$vm; VD_DOMAIN=""; fi
+                elif [[ "$vm" == "1" ]]; then VD_MODE="1"; VD_DOMAIN=""; fi
                 ;;
             2)
                 [ "$ENABLE_RE" != "1" ] && continue
@@ -921,12 +974,9 @@ show_nodes() {
         if [ "$VD_MODE" == "1" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
             link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
-        elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
+        elif [ "$VD_MODE" == "2" ] && [ -n "$VD_DOMAIN" ]; then
             echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
             link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
-        else
-            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
-            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
@@ -958,13 +1008,13 @@ show_nodes() {
         [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=${HY_PORTS}"
         
         echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
-        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${mport_suffix}#${NODE_PREFIX}-HY2"
+        link3="hysteria2://${PW_HY}@${VD_DOMAIN:-$ip}:${PORT_HY}?sni=${VD_DOMAIN:-bing.com}${mport_suffix}#${NODE_PREFIX}-HY2"
         echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
     fi
     if [ "$ENABLE_TC" == "1" ]; then
         echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
-        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        link4="tuic://${UUID_TC}:${PW_TC}@${VD_DOMAIN:-$ip}:${PORT_TC}?sni=${VD_DOMAIN:-bing.com}&alpn=h3&congestion_control=bbr#${NODE_PREFIX}-TUIC"
         echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
     fi
     if [ "$ENABLE_S5" == "1" ]; then
