@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box VLESS + WS + Argo 稳定架构
+# Sing-box 6-in-1
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,37 +26,52 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}      ${YELLOW}${BOLD}✨ Kele's Sing-box VLESS + Argo 稳定架构 (TLS 强制版) ✨${NC}    ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
 
 # --- 全局变量 ---
+
+# JSON字符串转义（防止用户输入破坏config.json）
 json_escape() {
     local s="$1"
-    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
     printf '%s' "$s"
 }
 
+# URL编码（防止特殊字符污染订阅链接）
 url_encode() {
-    local s="$1"; local result=""; local i c
+    local s="$1"
+    local result=""
+    local i c
+    # IPv6地址含方括号时，保留方括号不编码
     for ((i=0; i<${#s}; i++)); do
         c="${s:$i:1}"
-        if [[ "$c" =~ ^[a-zA-Z0-9_.~%-\[\]]+$ ]]; then result+="$c"
-        else result+=$(printf '%%%02X' "'$c"); fi
+        if [[ "$c" =~ ^[a-zA-Z0-9_.~%-\[\]]+$ ]]; then
+            result+="$c"
+        else
+            result+=$(printf '%%%02X' "'$c")
+        fi
     done
     printf '%s' "$result"
 }
 
+# 检测systemd是否支持append语法
 systemd_supports_append() {
     if command -v systemctl >/dev/null 2>&1; then
         local ver
         ver=$(systemd --version 2>/dev/null | head -n1 | grep -oE '[0-9]+' | head -n1)
-        if [ -n "$ver" ] && [ "$ver" -ge 240 ]; then return 0; fi
+        if [ -n "$ver" ] && [ "$ver" -ge 240 ]; then
+            return 0
+        fi
     fi
     return 1
 }
-
 SB_DIR="/etc/sing-box"
 SB_CONF="${SB_DIR}/config.json"
 SB_INFO="${SB_DIR}/install.info"
@@ -75,30 +90,61 @@ if [[ "$0" != "/usr/bin/sb" ]]; then
         chmod +x /usr/bin/sb
         msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
         sleep 1
+    else
+        msg_warn "检测到内存管道执行，跳过快捷指令 'sb' 生成。如需生成，请将脚本下载到本地执行。"
+        sleep 2
     fi
 fi
 
 load_config() {
     [ -f "$SB_INFO" ] && source "$SB_INFO"
+    [ -z "$VD_MODE" ] && VD_MODE="2"
     [ -z "$VD_DOMAIN" ] && VD_DOMAIN=""
     [ -z "$ENABLE_VD" ] && ENABLE_VD="1"
+    [ -z "$ENABLE_RE" ] && ENABLE_RE="1"
+    [ -z "$ENABLE_HY" ] && ENABLE_HY="1"
+    [ -z "$ENABLE_TC" ] && ENABLE_TC="1"
+    [ -z "$ENABLE_S5" ] && ENABLE_S5="1"
     [ -z "$ENABLE_ARGO" ] && ENABLE_ARGO="1"
+    [ -z "$HY_HOPPING" ] && HY_HOPPING="0"
+    [ -z "$HY_PORTS" ] && HY_PORTS=""
 }
 
 save_config() {
     cat > "$SB_INFO" << EOF
 UUID_VD=$UUID_VD
+UUID_RE=$UUID_RE
 UUID_ARGO=$UUID_ARGO
+UUID_TC=$UUID_TC
+PW_HY=$PW_HY
+PW_TC=$PW_TC
+S5_U=$S5_U
+S5_P=$S5_P
 PORT_VD=$PORT_VD
+PORT_RE=$PORT_RE
+PORT_HY=$PORT_HY
+PORT_TC=$PORT_TC
+PORT_S5=$PORT_S5
+REALITY_PRK=$REALITY_PRK
+REALITY_PBK=$REALITY_PBK
+REALITY_SNI=$REALITY_SNI
+REALITY_SHORT_ID=$REALITY_SHORT_ID
 WARP_MODE=$WARP_MODE
 WARP_DOMAINS=$WARP_DOMAINS
 CUSTOM_IP=$CUSTOM_IP
 ARGO_MODE=$ARGO_MODE
 ARGO_TOKEN=$ARGO_TOKEN
 ARGO_DOMAIN=$ARGO_DOMAIN
+VD_MODE=$VD_MODE
 VD_DOMAIN=$VD_DOMAIN
 ENABLE_VD=$ENABLE_VD
+ENABLE_RE=$ENABLE_RE
+ENABLE_HY=$ENABLE_HY
+ENABLE_TC=$ENABLE_TC
+ENABLE_S5=$ENABLE_S5
 ENABLE_ARGO=$ENABLE_ARGO
+HY_HOPPING=$HY_HOPPING
+HY_PORTS=$HY_PORTS
 EOF
     chmod 600 "$SB_INFO"
 }
@@ -128,9 +174,14 @@ check_port_usage() {
     local port="$1"; [ -z "$port" ] && return 0
     if command -v lsof >/dev/null 2>&1; then
         lsof -i "TCP:$port" -sTCP:LISTEN >/dev/null 2>&1 && return 1
+        lsof -i "UDP:$port" >/dev/null 2>&1 && return 1
     fi
     if command -v ss >/dev/null 2>&1; then
         ss -tuln | grep -qE ":[0-9]*$port\>" && return 1
+        ss -uuln | grep -qE ":[0-9]*$port\>" && return 1
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -tuln | grep -qE ":[0-9]*$port\>" && return 1
+        netstat -uuln | grep -qE ":[0-9]*$port\>" && return 1
     fi
     return 0
 }
@@ -139,7 +190,10 @@ get_random_port() {
     local port
     while true; do
         port=$(( ((RANDOM << 15) | RANDOM) % 50000 + 10000 ))
-        if check_port_usage "$port"; then echo "$port"; return 0; fi
+        if check_port_usage "$port"; then
+            echo "$port"
+            return 0
+        fi
     done
 }
 
@@ -156,7 +210,8 @@ ask_port() {
             msg_error "端口 $temp_input 已被系统占用！"
             continue
         fi
-        eval "$var_name=\"$temp_input\""; return
+        eval "$var_name=\"$temp_input\""
+        return
     done
 }
 
@@ -169,7 +224,33 @@ ask_uuid() {
             msg_error "必须是标准的 UUID 格式！"
             continue
         fi
-        eval "$var_name=\"$temp_input\""; return
+        eval "$var_name=\"$temp_input\""
+        return
+    done
+}
+
+ask_port_range() {
+    local prompt_text="$1"; local var_name="$2"; local target_port="$3"; local temp_input
+    while true; do
+        reading "$prompt_text" temp_input
+        if [ -z "$temp_input" ]; then eval "$var_name=\"\""; return; fi
+        if [[ ! "$temp_input" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+            msg_error "格式错误！请输入类似 20000-30000 的端口段。"
+            continue
+        fi
+        local p_start="${BASH_REMATCH[1]}"; local p_end="${BASH_REMATCH[2]}"
+        if [ "$p_start" -ge "$p_end" ] || [ "$p_start" -lt 1 ] || [ "$p_end" -gt 65535 ]; then
+            msg_error "范围不合法！起始端口必须小于结束端口，且均在 1-65535 之间。"
+            continue
+        fi
+        if [ -n "$target_port" ]; then
+            if [ "$target_port" -lt "$p_start" ] || [ "$target_port" -gt "$p_end" ]; then
+                msg_error "逻辑错误！主端口 ($target_port) 必须包含在你填写的跳跃段 ($p_start-$p_end) 内，否则节点必定失联！"
+                continue
+            fi
+        fi
+        eval "$var_name=\"$temp_input\""
+        return
     done
 }
 
@@ -178,14 +259,18 @@ get_outbound_ip() {
     for i in 1 2 3; do
         ip=$(curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null); [ -n "$ip" ] && break
         ip=$(curl -s4 --max-time 5 https://ifconfig.me/ip 2>/dev/null); [ -n "$ip" ] && break
+        ip=$(curl -s4 --max-time 5 https://ip.gs 2>/dev/null); [ -n "$ip" ] && break
         ip=$(curl -s6 --max-time 5 https://api6.ipify.org 2>/dev/null); [ -n "$ip" ] && break
+        ip=$(curl -s6 --max-time 5 ipv6.ip.sb 2>/dev/null); [ -n "$ip" ] && break
         sleep 1
     done
     if [ -z "$ip" ]; then
         msg_error "无法自动探测公网IP，请确保网络连通或手动指定IP/域名。"
-        echo "127.0.0.1"; return 1
+        echo "127.0.0.1"
+        return 1
     fi
-    echo "$ip"; return 0
+    echo "$ip"
+    return 0
 }
 
 get_country_prefix() {
@@ -219,14 +304,14 @@ EOF
 }
 
 install_deps() {
-    echo ""; msg_info "正在检查并安装基础依赖环境..."
+    echo ""; msg_info "正在检查并安装基础依赖环境 (包含 iptables)..."
     if is_alpine; then
         apk update >/dev/null 2>&1
-        apk add bash curl wget jq openssl lsof socat procps libc6-compat gcompat >/dev/null 2>&1
+        apk add bash curl wget jq openssl lsof socat procps libc6-compat gcompat iptables ip6tables >/dev/null 2>&1
     else
         if command -v apt-get >/dev/null 2>&1; then
             apt-get update -y >/dev/null 2>&1
-            local apt_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "lsb-release")
+            local apt_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps" "lsb-release" "iptables")
             for pkg in "${apt_pkgs[@]}"; do
                 local cmd_name="$pkg"
                 [ "$pkg" = "lsb-release" ] && cmd_name="lsb_release"
@@ -235,7 +320,7 @@ install_deps() {
         elif command -v yum >/dev/null 2>&1; then
             yum makecache -y >/dev/null 2>&1
             yum install -y epel-release >/dev/null 2>&1
-            local yum_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps-ng" "redhat-lsb-core")
+            local yum_pkgs=("curl" "wget" "jq" "openssl" "lsof" "socat" "procps-ng" "redhat-lsb-core" "iptables")
             for pkg in "${yum_pkgs[@]}"; do
                 local cmd_name="$pkg"
                 [ "$pkg" = "redhat-lsb-core" ] && cmd_name="lsb_release"
@@ -298,17 +383,36 @@ install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
         local ARCH S_ARCH TAG
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
-        # 强制拉取最新正式版 (Latest Stable)
-        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' 2>/dev/null)
-        if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then TAG="v1.9.3"; fi
-        
-        msg_info "正在下载 sing-box ${TAG} (最新正式版)..."
+        # 获取最新 release（包括 alpha/pre-release）
+        TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases" | jq -r '.[0].tag_name' 2>/dev/null)
+        if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
+            TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' 2>/dev/null)
+            [ -z "$TAG" ] || [ "$TAG" == "null" ] && TAG="v1.9.3"
+        fi
+        msg_info "正在下载 sing-box ${TAG} (最新版/alpha)..."
         if safe_download "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${TAG#v}-linux-${S_ARCH}.tar.gz" "sb.tar.gz"; then
             tar -xzf sb.tar.gz || { msg_error "解压失败"; exit 1; }
             mv sing-box-*/sing-box "$SB_BIN"; rm -rf sb.tar.gz sing-box-*
             chmod +x "$SB_BIN"
         else exit 1; fi
     fi
+}
+
+# 生成Reality密钥对，增加健壮性校验
+generate_reality_keys() {
+    local keys
+    keys=$($SB_BIN generate reality-keypair 2>/dev/null)
+    if [ -z "$keys" ]; then
+        msg_error "sing-box 生成 Reality 密钥对失败，请检查二进制文件是否完整。"
+        return 1
+    fi
+    REALITY_PRK=$(echo "$keys" | awk '/PrivateKey/ {print $2}')
+    REALITY_PBK=$(echo "$keys" | awk '/PublicKey/ {print $2}')
+    if [ -z "$REALITY_PRK" ] || [ -z "$REALITY_PBK" ]; then
+        msg_error "解析 Reality 密钥失败，输出格式异常：$keys"
+        return 1
+    fi
+    return 0
 }
 
 install_argo() {
@@ -344,12 +448,21 @@ install_warp() {
 
 generate_config() {
     mkdir -p "$SB_DIR"
+
+    # 基础输入安全过滤：禁止JSON破坏性字符进入域名类变量
     VD_DOMAIN="${VD_DOMAIN//\\/}"; VD_DOMAIN="${VD_DOMAIN//\"/}"
+    REALITY_SNI="${REALITY_SNI//\\/}"; REALITY_SNI="${REALITY_SNI//\"/}"
     WARP_DOMAINS="${WARP_DOMAINS//\\/}"; WARP_DOMAINS="${WARP_DOMAINS//\"/}"
 
-    if [[ "$ENABLE_VD" == "1" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
-        msg_error "致命错误: 未找到域名 ${VD_DOMAIN} 的证书。"
-        msg_error "各大客户端已弃用不安全直连模式，请确保成功申请证书后再继续。"
+    if [[ "$VD_MODE" != "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
+        openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) -keyout "${SB_DIR}/server.key" -out "${SB_DIR}/server.crt" -subj "/CN=bing.com" -days 3650 >/dev/null 2>&1
+        chmod 600 "${SB_DIR}/server.key" "${SB_DIR}/server.crt"
+    fi
+
+    # VD_MODE=3 使用真实域名证书时，若证书缺失则报错
+    if [[ "$VD_MODE" == "3" ]] && [[ ! -f "${SB_DIR}/server.crt" ]]; then
+        msg_error "VD_MODE=3 需要真实域名证书，但 ${SB_DIR}/server.crt 不存在！"
+        msg_error "请先在协议管理中配置真实域名并申请证书。"
         return 1
     fi
 
@@ -368,8 +481,28 @@ generate_config() {
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-argo\", \"listen\": \"127.0.0.1\", \"listen_port\": 10086, \"users\": [ { \"uuid\": \"$UUID_ARGO\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/argo\" } },"
     fi
 
-    if [ "$ENABLE_VD" == "1" ] && [ -n "$VD_DOMAIN" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+    if [ "$ENABLE_RE" == "1" ]; then
+        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID_RE\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"\" ] } } },"
+    fi
+
+    if [ "$ENABLE_VD" == "1" ]; then
+        if [ "$VD_MODE" == "1" ]; then
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+        elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+        else
+            INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
+        fi
+    fi
+
+    if [ "$ENABLE_HY" == "1" ]; then
+        INBOUNDS="$INBOUNDS { \"type\": \"hysteria2\", \"tag\": \"in-hy2\", \"listen\": \"::\", \"listen_port\": $PORT_HY, \"users\": [ { \"password\": \"$PW_HY\" } ], \"tls\": { \"enabled\": true, \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" } },"
+    fi
+    if [ "$ENABLE_TC" == "1" ]; then
+        INBOUNDS="$INBOUNDS { \"type\": \"tuic\", \"tag\": \"in-tuic\", \"listen\": \"::\", \"listen_port\": $PORT_TC, \"users\": [ { \"uuid\": \"$UUID_TC\", \"password\": \"$PW_TC\" } ], \"tls\": { \"enabled\": true, \"alpn\": [\"h3\"], \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"congestion_control\": \"bbr\" },"
+    fi
+    if [ "$ENABLE_S5" == "1" ]; then
+        INBOUNDS="$INBOUNDS { \"type\": \"socks\", \"tag\": \"in-socks\", \"listen\": \"::\", \"listen_port\": $PORT_S5, \"users\": [ { \"username\": \"$S5_U\", \"password\": \"$S5_P\" } ] },"
     fi
 
     INBOUNDS=${INBOUNDS%,}
@@ -396,7 +529,38 @@ EOF
     save_config
 }
 
+# --- 防火墙端口跳跃模块 (带高级冲突规避) ---
+apply_iptables() {
+    # 彻底清洗老规则
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+
+    if [ "$ENABLE_HY" == "1" ] && [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ]; then
+        local start_port end_port
+        start_port=$(echo "$HY_PORTS" | cut -d'-' -f1)
+        end_port=$(echo "$HY_PORTS" | cut -d'-' -f2)
+
+        # 核心逻辑：为 TUIC 和 SOCKS5 建立豁免通道，防止被 Hy2 规则强行劫持
+        if [ "$ENABLE_TC" == "1" ] && [ -n "$PORT_TC" ]; then
+            iptables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+        fi
+        if [ "$ENABLE_S5" == "1" ] && [ -n "$PORT_S5" ]; then
+            iptables -t nat -A PREROUTING -p udp --dport "$PORT_S5" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+            ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_S5" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
+        fi
+
+        # 建立跳跃劫持规则
+        iptables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
+        ip6tables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
+    fi
+}
+
 setup_services() {
+    apply_iptables
+
     local ARGO_CMD="$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
     if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
         ARGO_CMD="$ARGO_BIN tunnel run --token $(printf '%q' "$ARGO_TOKEN")"
@@ -465,37 +629,33 @@ check_existing() {
 
 install_fast() {
     print_logo
-    echo -e "${BG_PURPLE} 一键极速部署 ${NC} ${YELLOW}开始自动化部署...${NC}\n"
+    echo -e "${BG_PURPLE} 一键极速部署 ${NC} ${YELLOW}开始部署全协议...${NC}\n"
     check_existing || return
 
     install_deps; install_singbox; install_argo
 
-    UUID_VD=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid)
-    ENABLE_VD=1; ENABLE_ARGO=1
+    UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
+    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
+
+    ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
 
     msg_info "正在自动分配系统可用端口..."
-    PORT_VD=$(get_random_port)
+    PORT_VD=$(get_random_port); PORT_RE=$(get_random_port); PORT_HY=$(get_random_port)
+    PORT_TC=$(get_random_port); PORT_S5=$(get_random_port)
 
-    # 强制域名和证书申请环节
-    while true; do
-        echo -e "\n${BG_RED} 安全策略强制要求 ${NC} 为了兼容新版客户端，必须配置真实 TLS 证书。"
-        reading "请填入已解析到本机 IP 的域名 (必填):" domain_input
-        if [ -n "$domain_input" ]; then
-            if apply_cert "$domain_input"; then
-                VD_DOMAIN="$domain_input"
-                break
-            else
-                msg_error "证书申请失败！请检查域名解析是否生效，或更换域名后重试。"
-                exit 1
-            fi
-        else
-            msg_error "域名不能为空，部署已强制中断！"
-        fi
-    done
+    msg_info "正在生成 Reality 专属密钥对..."
+    if ! generate_reality_keys; then
+        msg_error "Reality 密钥生成失败，安装中止。"
+        exit 1
+    fi
+    REALITY_SHORT_ID=""
+    REALITY_SNI="addons.mozilla.org"
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""
+    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
+    HY_HOPPING="0"; HY_PORTS=""
 
     msg_info "正在写入底层架构并启动守护进程..."
     if ! generate_config; then
@@ -513,36 +673,57 @@ install_custom() {
 
     install_deps; install_singbox; install_argo
 
-    UUID_VD=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid)
+    UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
+    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
+    S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
-    echo -e "${BG_BLUE} 协议开关 ${NC}"
-    ENABLE_VD=1 # 核心节点强制开启
+    echo -e "${BG_BLUE} 协议开关 ${NC} (NAT 环境建议自定义端口)"
+    reading "启用 VLESS (WS) [y/n] (默认 y)" c_vd; c_vd=${c_vd,,}; [ -z "$c_vd" ] && c_vd="y"; ENABLE_VD=$([[ "$c_vd" == "y" ]] && echo 1 || echo 0)
+    reading "启用 VLESS (XTLS-Reality) [y/n] (默认 y)" c_re; c_re=${c_re,,}; [ -z "$c_re" ] && c_re="y"; ENABLE_RE=$([[ "$c_re" == "y" ]] && echo 1 || echo 0)
+    reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy; c_hy=${c_hy,,}; [ -z "$c_hy" ] && c_hy="y"; ENABLE_HY=$([[ "$c_hy" == "y" ]] && echo 1 || echo 0)
+    reading "启用 TUIC v5 (UDP) [y/n] (默认 y)" c_tc; c_tc=${c_tc,,}; [ -z "$c_tc" ] && c_tc="y"; ENABLE_TC=$([[ "$c_tc" == "y" ]] && echo 1 || echo 0)
+    reading "启用 SOCKS5 [y/n] (默认 y)" c_s5; c_s5=${c_s5,,}; [ -z "$c_s5" ] && c_s5="y"; ENABLE_S5=$([[ "$c_s5" == "y" ]] && echo 1 || echo 0)
     reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar; c_ar=${c_ar,,}; [ -z "$c_ar" ] && c_ar="y"; ENABLE_ARGO=$([[ "$c_ar" == "y" ]] && echo 1 || echo 0)
 
     echo -e "\n${BG_BLUE} 端口与参数分配 ${NC}"
-    ask_port "VLESS (WS+TLS) 外网端口 (回车随机)" PORT_VD
-    if [ -z "$PORT_VD" ]; then PORT_VD=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 VLESS 端口: ${GREEN}$PORT_VD${NC}"; fi
-
-    # 强制域名和证书申请环节
-    while true; do
-        echo -e "\n${BG_RED} 安全策略强制要求 ${NC} 为了兼容新版客户端，必须配置真实 TLS 证书。"
-        reading "请填入已解析到本机 IP 的域名 (必填):" domain_input
-        if [ -n "$domain_input" ]; then
-            if apply_cert "$domain_input"; then
-                VD_DOMAIN="$domain_input"
-                break
-            else
-                msg_error "证书申请失败！请检查域名解析是否生效，或更换域名后重试。"
-                exit 1
-            fi
-        else
-            msg_error "域名不能为空，部署已强制中断！"
+    
+    if [ "$ENABLE_VD" == "1" ]; then
+        ask_port "VLESS (WS) 外网端口 (回车随机)" PORT_VD
+        if [ -z "$PORT_VD" ]; then PORT_VD=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 VLESS 端口: ${GREEN}$PORT_VD${NC}"; fi
+    fi
+    if [ "$ENABLE_RE" == "1" ]; then
+        ask_port "Reality 外网端口 (建议443，回车随机)" PORT_RE
+        if [ -z "$PORT_RE" ]; then PORT_RE=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Reality 端口: ${GREEN}$PORT_RE${NC}"; fi
+        msg_info "正在生成 Reality 密钥对..."
+        if ! generate_reality_keys; then
+            msg_error "Reality 密钥生成失败，安装中止。"
+            exit 1
         fi
-    done
+        REALITY_SHORT_ID=""
+        REALITY_SNI="addons.mozilla.org"
+    fi
+    if [ "$ENABLE_HY" == "1" ]; then
+        ask_port "Hysteria2 外网端口 (回车随机)" PORT_HY
+        if [ -z "$PORT_HY" ]; then PORT_HY=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Hysteria2 端口: ${GREEN}$PORT_HY${NC}"; fi
+        
+        reading "是否开启端口跳跃 (Port Hopping)? [y/n] (默认 n)" ph
+        if [[ "${ph,,}" == "y" ]]; then
+            HY_HOPPING=1
+            ask_port_range "请输入连续跳跃端口段 (例如: 20000-30000)" HY_PORTS "$PORT_HY"
+        else HY_HOPPING=0; HY_PORTS=""; fi
+    fi
+    if [ "$ENABLE_TC" == "1" ]; then
+        ask_port "TUIC 外网端口 (回车随机)" PORT_TC
+        if [ -z "$PORT_TC" ]; then PORT_TC=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 TUIC 端口: ${GREEN}$PORT_TC${NC}"; fi
+    fi
+    if [ "$ENABLE_S5" == "1" ]; then
+        ask_port "SOCKS5 外网端口 (回车随机)" PORT_S5
+        if [ -z "$PORT_S5" ]; then PORT_S5=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 SOCKS5 端口: ${GREEN}$PORT_S5${NC}"; fi
+    fi
 
     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-    WARP_MODE="1"; WARP_DOMAINS=""
+    WARP_MODE="1"; WARP_DOMAINS=""; VD_MODE="2"; VD_DOMAIN=""
 
     echo ""; msg_info "正在写入底层架构并启动守护进程..."
     if ! generate_config; then
@@ -559,29 +740,80 @@ manage_protocols() {
     while true; do
         print_logo
         echo -e "${PURPLE}╭━━━ ⚙️ ${BG_BLUE} 协议精细化管理 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
-        [ "$ENABLE_VD" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS+TLS) ${YELLOW}(端口: $PORT_VD)${NC}"
-        [ "$ENABLE_ARGO" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [2]\t☁️  配置 Argo 隧道     ${YELLOW}(模式: $ARGO_MODE)${NC}"
+        [ "$ENABLE_VD" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [1]\t⚡ 修改 VLESS (WS)   ${YELLOW}(端口: $PORT_VD)${NC}"
+        [ "$ENABLE_RE" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [2]\t🎭 修改 Reality      ${YELLOW}(端口: $PORT_RE)${NC}"
+        [ "$ENABLE_HY" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
+        [ "$ENABLE_TC" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}"
+        [ "$ENABLE_S5" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}"
+        [ "$ENABLE_ARGO" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        printf '%b\n' "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}"
         printf '%b\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}"
         echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
-        reading "请选择操作 [0-2]" choice
+        reading "请选择操作 [0-7]" choice
         case $choice in
             1)
                 [ "$ENABLE_VD" != "1" ] && continue
                 ask_port "新 VLESS 端口 (回车不变)" p; [ -n "$p" ] && PORT_VD=$p
                 ask_uuid "新 VLESS 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_VD=$u
                 
-                echo -e "\n  ${YELLOW}当前绑定的真实域名: ${GREEN}${VD_DOMAIN}${NC}"
-                reading "是否需要更换域名并重新申请证书? [y/n] (默认 n)" c_cert
-                if [[ "${c_cert,,}" == "y" ]]; then
-                    reading "请输入已解析到此VPS的新真实域名" vd
+                local current_vd_mode_str="关闭 TLS (纯普通直连)"
+                [ "$VD_MODE" == "2" ] && current_vd_mode_str="开启 TLS (自签伪装证书)"
+                [ "$VD_MODE" == "3" ] && current_vd_mode_str="开启 TLS (真实域名证书: $VD_DOMAIN)"
+
+                echo -e "\n  ${YELLOW}当前 VLESS 模式: ${GREEN}${current_vd_mode_str}${NC}"
+                echo -e "  ${YELLOW}请选择新的 VLESS 模式 (直接回车保持不变)：${NC}"
+                echo -e "  [1] 关闭 TLS (纯普通直连)"
+                echo -e "  [2] 开启 TLS (自签伪装证书)"
+                echo -e "  [3] 开启 TLS (申请真实域名证书)"
+                reading "模式选择 [1-3]" vm
+                if [ "$vm" == "3" ]; then
+                    reading "请输入已解析到此VPS的真实域名" vd
                     if [ -n "$vd" ]; then
-                        if apply_cert "$vd"; then VD_DOMAIN="$vd"
-                        else msg_error "证书获取失败，域名未更改。"; fi
+                        if apply_cert "$vd"; then
+                            VD_MODE="3"; VD_DOMAIN="$vd"
+                        else
+                            msg_error "获取失败，放弃修改。"
+                        fi
+                    else
+                        msg_warn "操作取消。"
                     fi
-                fi
+                elif [[ "$vm" == "1" || "$vm" == "2" ]]; then VD_MODE=$vm; VD_DOMAIN=""; fi
                 ;;
             2)
+                [ "$ENABLE_RE" != "1" ] && continue
+                ask_port "新 Reality 端口 (回车不变)" p; [ -n "$p" ] && PORT_RE=$p
+                ask_uuid "新 Reality 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_RE=$u
+                reading "伪装 SNI 域名 (当前: $REALITY_SNI)" s; [ -n "$s" ] && REALITY_SNI=$s
+                ;;
+            3)
+                [ "$ENABLE_HY" != "1" ] && continue
+                ask_port "新 Hy2 端口 (回车不变)" p; [ -n "$p" ] && PORT_HY=$p
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_HY=$pw
+                
+                local current_hop_str
+                current_hop_str=$([ "$HY_HOPPING" == "1" ] && echo "已开启 (${HY_PORTS})" || echo "未开启")
+                reading "是否开启端口跳跃 (Port Hopping)? [y/n] (默认 n, 当前状态: $current_hop_str)" ph
+                ph=${ph,,}
+                if [[ "$ph" == "y" ]]; then
+                    HY_HOPPING=1
+                    ask_port_range "请输入端口段 (例如: 20000-30000)" HY_PORTS "$PORT_HY"
+                elif [[ "$ph" == "n" ]]; then
+                    HY_HOPPING=0; HY_PORTS=""
+                fi
+                ;;
+            4)
+                [ "$ENABLE_TC" != "1" ] && continue
+                ask_port "新 TUIC 端口 (回车不变)" p; [ -n "$p" ] && PORT_TC=$p
+                ask_uuid "新 TUIC 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_TC=$u
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && PW_TC=$pw
+                ;;
+            5)
+                [ "$ENABLE_S5" != "1" ] && continue
+                ask_port "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p
+                reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw
+                ;;
+            6)
                 [ "$ENABLE_ARGO" != "1" ] && continue
                 ask_uuid "新 Argo 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_ARGO=$u
                 reading "[1]=临时隧道(随机域名)  [2]=固定隧道 (直接回车保持不变)" am
@@ -592,6 +824,21 @@ manage_protocols() {
                 elif [ "$am" == "1" ]; then
                     ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
                 fi
+                ;;
+            7)
+                echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
+                [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
+                [ "$ENABLE_RE" == "1" ] && echo "  [2] Reality"
+                [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
+                [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
+                [ "$ENABLE_S5" == "1" ] && echo "  [5] SOCKS5"
+                [ "$ENABLE_ARGO" == "1" ] && echo "  [6] Argo 隧道"
+                echo "  [0] 取消"
+                reading "选择停用目标 [0-6]" disable_choice
+                case $disable_choice in
+                    1) ENABLE_VD=0 ;; 2) ENABLE_RE=0 ;; 3) ENABLE_HY=0 ;; 4) ENABLE_TC=0 ;; 5) ENABLE_S5=0 ;; 6) ENABLE_ARGO=0 ;; 0) continue ;; *) msg_warn "无效输入"; sleep 1; continue ;;
+                esac
+                msg_success "目标协议已标记为停用！"
                 ;;
             0) break ;;
             *) continue ;;
@@ -645,17 +892,42 @@ show_nodes() {
     print_logo; [ ! -f "$SB_INFO" ] && msg_error "请先部署节点！" && sleep 1 && return
     load_config
 
+    msg_info "正在探测公网 IP (请稍候)..."
+    out_ip=$(get_outbound_ip)
     msg_info "正在获取节点物理位置归属地..."
     NODE_PREFIX=$(get_country_prefix)
 
+    if [ -z "$CUSTOM_IP" ]; then
+        echo -e " ${BG_BLUE} 网络探针 ${NC} 发现外网 IP: ${GREEN}$out_ip${NC} (${NODE_PREFIX})"
+        reading "若需指定入站IP/域名请在此输入 (一致请直接回车)" in_ip
+        [ -n "$in_ip" ] && CUSTOM_IP=$in_ip || CUSTOM_IP=$out_ip
+        save_config
+    fi
+
+    local ip=$CUSTOM_IP
+    [[ "$ip" =~ .*:.* ]] && ip="[${ip}]"
+
     echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
-    local link1 link2
+    local link_re link1 link2 link3 link4 link5
 
-    if [ "$ENABLE_VD" == "1" ] && [ -n "$VD_DOMAIN" ]; then
-        echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (已部署真实证书: ${VD_DOMAIN})"
-        # 移除了所有不安全的 allowInsecure 标识
-        link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
+    if [ "$ENABLE_RE" == "1" ]; then
+        echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
+        link_re="vless://${UUID_RE}@${ip}:${PORT_RE}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${REALITY_SNI}&fp=chrome&pbk=${REALITY_PBK}&type=tcp#${NODE_PREFIX}-REALITY"
+        echo -e "${CYAN}┃${NC}    ${link_re}"; all_links+="$link_re\n"
+    fi
+
+    if [ "$ENABLE_VD" == "1" ]; then
+        if [ "$VD_MODE" == "1" ]; then
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS]${NC} (关闭 TLS 纯直连)"
+            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=none&type=ws&path=%2Fws#${NODE_PREFIX}-VLESS"
+        elif [ "$VD_MODE" == "3" ] && [ -n "$VD_DOMAIN" ]; then
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (真实证书: ${VD_DOMAIN})"
+            link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
+        else
+            echo -e "${CYAN}┃${NC} ⚡ ${GREEN}[VLESS + WS + TLS]${NC} (自签伪装证书)"
+            link1="vless://${UUID_VD}@${ip}:${PORT_VD}?encryption=none&security=tls&sni=bing.com&alpn=http%2F1.1&type=ws&host=bing.com&path=%2Fws&allowInsecure=1#${NODE_PREFIX}-VLESS"
+        fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
     fi
 
@@ -679,6 +951,30 @@ show_nodes() {
             echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
         else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
     fi
+
+    if [ "$ENABLE_HY" == "1" ]; then
+        echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        local mport_suffix=""
+        [ "$HY_HOPPING" == "1" ] && [ -n "$HY_PORTS" ] && mport_suffix="&mport=${HY_PORTS}"
+        
+        echo -e "${CYAN}┃${NC} 🚀 ${GREEN}[Hysteria 2]${NC} (暴力加速)"
+        link3="hysteria2://${PW_HY}@${ip}:${PORT_HY}?insecure=1&sni=bing.com${mport_suffix}#${NODE_PREFIX}-HY2"
+        echo -e "${CYAN}┃${NC}    ${link3}"; all_links+="$link3\n"
+    fi
+    if [ "$ENABLE_TC" == "1" ]; then
+        echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        echo -e "${CYAN}┃${NC} 🏎️  ${GREEN}[TUIC v5]${NC} (QUIC 协议)"
+        link4="tuic://${UUID_TC}:${PW_TC}@${ip}:${PORT_TC}?sni=bing.com&alpn=h3&congestion_control=bbr&allow_insecure=1#${NODE_PREFIX}-TUIC"
+        echo -e "${CYAN}┃${NC}    ${link4}"; all_links+="$link4\n"
+    fi
+    if [ "$ENABLE_S5" == "1" ]; then
+        echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
+        echo -e "${CYAN}┃${NC} 🛡️  ${GREEN}[SOCKS5]${NC} (基础代理)"
+        local cred="${S5_U}:${S5_P}" b64_cred
+        b64_cred=$(echo -n "$cred" | base64 -w0 2>/dev/null || echo -n "$cred" | base64)
+        link5="socks://${b64_cred}@${ip}:${PORT_S5}#${NODE_PREFIX}-SOCKS5"
+        echo -e "${CYAN}┃${NC}    ${link5}"; all_links+="$link5\n"
+    fi
     echo -e "${CYAN}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
 
     echo -e "\n ${BG_BLUE} Base64 订阅 ${NC} 一键复制以下内容导入客户端:"
@@ -698,6 +994,11 @@ uninstall_script() {
     svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
     svc_action disable sing-box >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
 
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
+    while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+    while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
+
     if is_alpine; then rm -f /etc/init.d/sing-box /etc/init.d/sb-argo
     else rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service; systemctl daemon-reload; fi
 
@@ -707,9 +1008,11 @@ uninstall_script() {
         elif command -v yum >/dev/null 2>&1; then yum remove -y cloudflare-warp >/dev/null 2>&1; fi
     fi
 
+    # 清理 sysctl 优化配置
     rm -f /etc/sysctl.d/99-singbox-optimize.conf
     sysctl --system >/dev/null 2>&1 || true
 
+    # 此处已删除 ! -name "sub.txt" 的限制，实现彻底销毁
     find "$SB_DIR" -type f -delete 2>/dev/null
     rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
     msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
@@ -723,12 +1026,13 @@ main_menu() {
 
         echo -e "   系统状态: $status"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        printf '%b\n' "   ${GREEN}[1]${NC}\t🚀 一键极速部署 (强制 TLS)"
-        printf '%b\n' "   ${GREEN}[2]${NC}\t🛠️ 自定义部署 (强制 TLS)"
-        printf '%b\n' "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书)"
-        printf '%b\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持)"
+        printf '%b\n' "   ${GREEN}[1]${NC}\t🚀 一键快速部署 / 重置引擎"
+        printf '%b\n' "   ${GREEN}[2]${NC}\t🛠️ 自定义按需部署 / 重置引擎"
+        printf '%b\n' "   ${GREEN}[3]${NC}\t⚙️  单独协议参数管理 (端口/独立UUID/证书/停用)"
+        printf '%b\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
         printf '%b\n' "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
+        # 卸载菜单文字已更新，提示会清理所有数据
         printf '%b\n' "   ${RED}[9]${NC}\t🗑️ 彻底卸载"
         printf '%b\n' "   ${RED}[0]${NC}\t🚪 退出面板"
         echo ""
