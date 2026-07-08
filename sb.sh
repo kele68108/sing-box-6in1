@@ -528,9 +528,9 @@ generate_config() {
 {
   "log": { "level": "warn", "timestamp": true },
   "dns": {
-    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "1.1.1.1" } ],
+    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "2606:4700:4700::1111" } ],
     "final": "dns-remote",
-    "strategy": "ipv4_only"
+    "strategy": "prefer_ipv6"
   },
   "inbounds": [
     $INBOUNDS
