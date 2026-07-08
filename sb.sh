@@ -195,6 +195,131 @@ pick_dns_config() {
     fi
 }
 
+# 检测当前主机是否严格 IPv6-only：连 真 IPv4 endpoint 都不通（没 IPv4 routing 也没 WARP tunnel）。
+# 注意：Cloudflare NAT64 prefix `64:ff9b::/96` 在 NAT64 daemon 启动后才有效。
+is_ipv6_only_strict() {
+    # 1) 是否有 IPv4 default route
+    ip -4 route show default | grep -q . && return 1
+    # 2) 是否有 IPv4 地址
+    [ -n "$(ip -4 addr show scope global 2>/dev/null | awk '/inet / {print $2}')" ] && return 1
+    # 3) 直接 dial 1.1.1.1 / 162.159.192.1 等成功吗
+    timeout 3 python3 -c "
+import socket
+for host in ('1.1.1.1', '8.8.8.8', '162.159.192.1'):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(2.5)
+        s.connect((host, 443)); s.close()
+        import os; os._exit(0)
+    except Exception: pass
+import os; os._exit(1)
+" 2>/dev/null && return 1
+    return 0
+}
+
+# 检测 tayga NAT64 是否已经在响应
+nat64_active() {
+    [ -d /sys/class/net/nat64 ] || return 1
+    ip link show nat64 2>/dev/null | grep -q "state UP" || return 1
+    ip -6 route show 2>/dev/null | grep -q "^64:ff9b::/96 dev nat64" || return 1
+    # 还要 192.168.255.0/24 dev nat64 (返回 IPv4 pool)
+    ip -4 route show 2>/dev/null | grep -q "192.168.255.0/24 dev nat64" || return 1
+    return 0
+}
+
+# 取当前 VPS 的公网 IPv6（eth0 first global scope）
+get_vps_ipv6() {
+    ip -6 addr show scope global 2>/dev/null | awk '/inet6 / {print $2}' | cut -d/ -f1 | head -1
+}
+
+# 装 tayga NAT64 daemon（纯 IPv6 主机的兜底，保证后续下载能拿 IPv4 资源）。
+# tayga 使用 tun device，userland RFC 6052 stateless 64:ff9b::/96 NAT64 转换。
+# 注意：tayga 的 dynamic-pool 给 visitor 用 RFC1918 IPv4，Cloudflare 等公网 IPv4 服务的源 IP
+# 会是 192.168.255.x；部分服务器会因为源是 RFC1918 拒收。这个 hosts 不能完全替代 WARP tunnel，
+# 但能给 apt/curl/GitHub downloads 一条备用通道。
+install_nat64() {
+    is_ipv6_only_strict || { msg_info "IPv4 已通，无需 NAT64"; return 0; }
+    nat64_active && { msg_info "NAT64 已运行"; return 0; }
+    if is_alpine; then return 1; fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y tayga >/dev/null 2>&1 || {
+        msg_warn "tayga 安装失败，apt IPv6 源不通的话跳过 NAT64"; return 1
+    }
+    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
+    [ -z "$VPS_IPV6" ] && VPS_IPV6=$(ip -6 addr show eth0 2>/dev/null | awk '/inet6 / {print $2; exit}' | cut -d/ -f1)
+    if [ -z "$VPS_IPV6" ]; then msg_warn "找不到 VPS 公网 IPv6，NAT64 装不上"; return 1; fi
+    mkdir -p /var/lib/tayga
+    cat > /etc/tayga.conf <<EOF
+tun-device nat64
+ipv4-addr 192.168.255.1
+ipv6-addr ${VPS_IPV6}
+prefix 64:ff9b::/96
+dynamic-pool 192.168.255.0/24
+data-dir /var/lib/tayga
+EOF
+    # tayga systemd unit 不会自动给 nat64 device 加 IPv4 / bring up，要手动补
+    systemctl enable --now tayga 2>/dev/null || { msg_warn "systemctl enable tayga failed"; return 1; }
+    sleep 1
+    systemctl restart tayga 2>/dev/null  # restart 才能 ensure data-dir ready
+    sleep 2
+    ip link set nat64 up 2>/dev/null || true
+    ip addr add 192.168.255.1/32 dev nat64 2>/dev/null || true
+    ip -6 route add 64:ff9b::/96 dev nat64 2>/dev/null || true
+    ip -4 route add 192.168.255.0/24 dev nat64 2>/dev/null || true
+    sysctl -wq net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
+    if nat64_active; then
+        msg_success "NAT64 已部署，等价入口 64:ff9b::<ipv4>"
+    else
+        msg_warn "tayga 启动了但 nat64 device 状态异常，IPv4 仍不可达"
+    fi
+}
+
+# 装 unbound DNS64 (RFC 6147)，使上游返回的 A records 被合成为 `64:ff9b::<A>` 的 AAAA。
+# 配合 install_nat64，纯 IPv6 主机可以用一个 AAAA 域名走到 IPv4 destination。
+install_dns64() {
+    is_ipv6_only_strict || { msg_info "IPv4 已通，跳过 DNS64"; return 0; }
+    DEBIAN_FRONTEND=noninteractive apt-get install -y unbound >/dev/null 2>&1 || return 1
+    mkdir -p /etc/unbound/unbound.conf.d
+    cat > /etc/unbound/unbound.conf.d/dns64.conf <<'EOF'
+server:
+    module-config: "dns64 validator iterator"
+    interface: 0.0.0.0
+    interface: ::0
+    port: 53
+    do-ip4: yes
+    do-ip6: yes
+    do-udp: yes
+    do-tcp: yes
+    num-threads: 1
+    msg-cache-size: 4m
+    rrset-cache-size: 4m
+    cache-min-ttl: 300
+    val-permissive-mode: yes
+    # 把 64:ff9b::/96 反向解析视为本地 transparent，避免 unbound 当 NXDOMAIN 拒答
+    local-zone: "64.ff.9.b.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa." transparent
+
+forward-zone:
+    name: "."
+    forward-addr: 2606:4700:4700::1111
+    forward-addr: 2001:4860:4860::8888
+EOF
+    systemctl enable --now unbound
+    systemctl restart unbound
+    sleep 1
+    if ss -tnlup 2>/dev/null | grep -qE ":53\b.*unbound"; then
+        msg_success "unbound DNS64 listening on :53"
+        # 把 /etc/resolv.conf 切到本地 DNS64（保留 backup）
+        if [ -f /etc/resolv.conf ] && ! grep -q "127.0.0.1" /etc/resolv.conf 2>/dev/null; then
+            cp /etc/resolv.conf /etc/resolv.conf.bak-sb 2>/dev/null
+            cat > /etc/resolv.conf <<EOF
+nameserver 127.0.0.1
+nameserver ::1
+nameserver 2606:4700:4700::1111
+EOF
+        fi
+    else
+        msg_warn "unbound 未监听 :53，可能与 systemd-resolved 冲突"
+    fi
+}
+
 svc_action() {
     local action="$1"; local service="$2"
     if is_alpine; then
@@ -348,6 +473,13 @@ EOF
 }
 
 install_deps() {
+    # 提前判定是否为纯 IPv6 环境 (没 IPv4 出网)。如果是，先跑 NAT64/DNS64 兜底，
+    # 后续 install_singbox/install_argo 的 curl 下载也能走 NAT64 桥接 IPv4 endpoints。
+    if is_ipv6_only_strict && ! nat64_active; then
+        msg_info "检测到 IPv6-only 环境，先部署 NAT64/DNS64 ..."
+        install_dns64
+        install_nat64
+    fi
     echo ""; msg_info "正在检查并安装基础依赖环境 (包含 iptables)..."
     if is_alpine; then
         apk update >/dev/null 2>&1
@@ -378,15 +510,47 @@ install_deps() {
     optimize_network
 }
 
+# safe_download: 多路 fallback，优先 IPv4 直连，回退到 NAT64/镜像。
+# 1. 直连 url（IPv4 host 走 v4，IPv6 host 走 v6）
+# 2. 如果是 IPv6-only 且目标主机 A record (没 AAAA)，装 NAT64 后包成 [64:ff9b::<A>] 再试
+# 3. 镜像源 (gh-proxy IPv6/v4 fallback)
+# 注意：sb.sh 全程先 install_nat64/install_dns64 走 IPv4 endpoints，
+# 所以 2/3 路径在 NAT64 已启动 env 下很少触发（保留兼容性）
 safe_download() {
     local url="$1"; local dest="$2"
     msg_info "正在下载核心组件: $(basename "$dest")..."
     local http_code
-    http_code=$(curl -sL -w "%{http_code}" -o "$dest" "$url")
-    if [ "$http_code" != "200" ]; then msg_error "文件下载失败！"; rm -f "$dest"; return 1; fi
-    if [ ! -s "$dest" ]; then msg_error "下载失败！文件为空。"; rm -f "$dest"; return 1; fi
-    return 0
+    # 第一次探针：纯 IPv6 主机 + 目标只有 A record 时，after install_nat64 重写 url
+    local target
+    target="$url"
+    if is_ipv6_only_strict && ! nat64_active; then
+        install_nat64 || true
+        if nat64_active; then
+            # 把 URL 里的 host 替换成 [64:ff9b::<A>] 形式
+            local host p
+            host=$(printf '%s' "$url" | sed -E 's|^https?://([^/]+).*|\1|')
+            p=$(printf '%s' "$url" | sed -E 's|^https?://[^/]+(/.*)?$|\1|')
+            [ -z "$p" ] && p="/"
+            local ip
+            ip=$(getent ahosts "$host" 2>/dev/null | awk '$2=="STREAM" && $1 !~ /:/ {print $1; exit}')
+            if [ -n "$ip" ]; then
+                target="http://[64:ff9b::${ip}]$p"
+                msg_info "NAT64 路径下载 (RFC 6052 mapping): $host -> [64:ff9b::$ip]$p"
+            fi
+        fi
+    fi
+    http_code=$(curl -sL --max-time 25 -w "%{http_code}" -o "$dest" "$target" 2>/dev/null)
+    if [ "$http_code" = "200" ] && [ -s "$dest" ]; then return 0; fi
+    # 优先尝试 IPv6-friendly mirror
+    for mirror in "https://v6.gh-proxy.org" "https://gh-proxy.com" "https://ghproxy.lvedong.eu.org"; do
+        http_code=$(curl -sL --max-time 25 -w "%{http_code}" -o "$dest" "$mirror/$url" 2>/dev/null)
+        [ "$http_code" = "200" ] && [ -s "$dest" ] && { msg_info "通过 $mirror 下载"; return 0; }
+    done
+    msg_error "文件下载失败 (last code: $http_code, url: $url)"
+    rm -f "$dest"
+    return 1
 }
+
 
 apply_cert() {
     local domain=$1
@@ -495,39 +659,169 @@ install_wireproxy() {
     msg_success "WireProxy 已安装：/usr/local/bin/wireproxy"
 }
 
+# 安装 WARP：先 NAT64/DNS64 兜底走 IPv4 下载，再 cloudflare-warp apt 注册设备，最后
+# kernel wireguard module 用注册得到的 private_key 上线。sb.sh 安装过程中绝对不依赖
+# cloudflare-warp 的 systemd daemon（warp-svc）；只 apt install + 注册 + 提取 key
+# 后自己用 `ip link add warp type wireguard` 起步，避免 daemon 接管 routing 锁住 SSH。
 install_warp() {
-    if is_alpine; then return; fi
+    if is_alpine; then msg_warn "Alpine 不支持 WARP"; return 1; fi
+
+    # 决定 WARP_MODE 影响 install 行为（MODE=2 全局，MODE=3 走 system routing table 51820）
+    # 默认走 fwmark table 51820，让所有 IPv4 (和可选 IPv6) 出网走 WARP tunnel。
+    local WARP_TBL_V4="${WARP_TABLE_V4:-51820}"
+    local WARP_TBL_V6="${WARP_TABLE_V6:-51821}"
+
+    # === 阶段 1：NAT64/DNS64 兜底（仅当主机真 IPv6-only 时）============
+    # 安装 WARP 需要先能下载 cloudflare-warp apt 包；apt 经 Debian 三家 IPv6 mirror 就 work，
+    # 但走 IPv4 endpoints 仍会用到，所以这里 install_dns64 + install_nat64 一并部署。
+    install_dns64
+    install_nat64
+
+    # === 阶段 2：cloudflare-warp apt（提供 warp-cli 拿 device private_key）===
     if ! command -v warp-cli >/dev/null 2>&1; then
-        # 优先 apt 安装 cloudflare-warp（DIST=trixie/bookworm 这种 LTS 才有 release 包）。
-        # 注意：Debian sid/testing 的 cloudflare-client repo 经常没对应 main 包，需要 fallback。
-        msg_info "正在安装 Cloudflare WARP..."
-        if command -v apt-get >/dev/null 2>&1; then
-            mkdir -p /usr/share/keyrings
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null
-            local dist_codename=""
-            if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
-            else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" > /etc/apt/sources.list.d/cloudflare-client.list 2>/dev/null
-            apt-get update -y >/dev/null 2>&1
-            apt-get install -y cloudflare-warp >/dev/null 2>&1
-            # 清理失败的 source list 以防日后 apt update 报错
-            [ ! -x /usr/bin/warp-cli ] && rm -f /etc/apt/sources.list.d/cloudflare-client.list
-        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
-        else return 1; fi
+        msg_info "正在安装 cloudflare-warp (含 warp-cli) ..."
+        if ! command -v apt-get >/dev/null 2>&1; then
+            msg_error "不支持的包管理器（仅 Debian 系）"; return 1
+        fi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg lsb-release >/dev/null 2>&1
+        mkdir -p /usr/share/keyrings
+        curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg \
+            | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null
+        local dist=""
+        if command -v lsb_release >/dev/null 2>&1; then dist=$(lsb_release -cs)
+        else dist=$(grep ^VERSION_CODENAME= /etc/os-release 2>/dev/null | cut -d= -f2)
+        fi
+        [ -z "$dist" ] && dist="stable"
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist main" \
+            > /etc/apt/sources.list.d/cloudflare-client.list
+        if ! apt-get update >/dev/null 2>&1; then
+            rm -f /etc/apt/sources.list.d/cloudflare-client.list
+            msg_warn "pkg.cloudflareclient.com 仓库不通（IPv6 主机），跳过 warp-cli 注册步骤"
+        fi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp >/dev/null 2>&1 || true
     fi
-    if command -v warp-cli >/dev/null 2>&1; then
-        warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
-        warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
+
+    # === 阶段 3：注册设备 + 提取私钥 ==================================
+    if ! command -v warp-cli >/dev/null 2>&1; then
+        msg_warn "warp-cli 没装（apt 失败），跳过 WARP tunnel 部署；sing-box 直接出 IPv6 即可"
+        return 1
     fi
-    # 兜底：即使 warp-cli 没装成，也调用 fscarmen/menu.sh 部署 WireGuard interface 模式。
-    # 这是真实能让 WARP 接管出网的方式（fwmark table 51820 + wireguard-go）。
-    if [ -f /etc/wireguard/menu.sh ] && [ ! -x /usr/local/bin/warp-cli ] && ! pgrep -f wireguard-go >/dev/null 2>&1; then
-        msg_info "调用 WARP menu.sh (wireguard-go + fwmark routing) 兜底..."
-        bash /etc/wireguard/menu.sh o >/dev/null 2>&1 || true
+
+    # 关键：禁止 warp-svc 自动启动，否则它会安装 nftables rules 接管 outbound IPv4，
+    # 半成品状态会锁住 SSH（出+进方向 IPv6 都被 hijack）。我们只用 warp-cli 注册设备 + 提 key，
+    # 真正的 wireguard interface 由 kernel module 跑我们自己的 fwmark 规则。
+    systemctl disable --now warp-svc 2>/dev/null || true
+
+    local REG="/var/lib/cloudflare-warp/registration.json"
+    [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
+    if [ ! -f "$REG" ]; then
+        msg_info "首次注册 Cloudflare WARP 设备..."
+        # 备一份原配置再注册避免覆盖旧身份
+        [ -f /var/lib/cloudflare-warp/registration.json ] && cp /var/lib/cloudflare-warp/registration.json /var/lib/cloudflare-warp/registration.json.bak-$(date +%s) 2>/dev/null
+        warp-cli --accept-tos registration new >/dev/null 2>&1 || {
+            msg_warn "warp-cli registration new 失败（IPv6 主机 + 无 IPv4 全出 NAT64），跳过 WARP 部署"
+            return 1
+        }
     fi
-    # 可选：SB_INSTALL_WIREPROXY=1 时附带装 wireproxy
-    install_wireproxy
+
+    # 提取 identity
+    local PRIV IPV4 IPV6
+    PRIV=$(jq -r '.warp.private_key // empty' "$REG" 2>/dev/null)
+    IPV4=$(jq -r '.warp.interface.addresses.v4 // empty' "$REG" 2>/dev/null)
+    IPV6=$(jq -r '.warp.interface.addresses.v6 // empty' "$REG" 2>/dev/null)
+    if [ -z "$PRIV" ] || [ -z "$IPV4" ] || [ -z "$IPV6" ]; then
+        msg_warn "registration.json 解析失败 (PRIV=${PRIV:-N/A}, IPV4=${IPV4:-N/A}, IPV6=${IPV6:-N/A})"
+        return 1
+    fi
+
+    # === 阶段 4：写 /etc/wireguard/warp.conf + 启动 kernel wireguard =======
+    mkdir -p /etc/wireguard
+    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
+    cat > /etc/wireguard/warp.conf <<EOF
+[Interface]
+PrivateKey = ${PRIV}
+Address = ${IPV4}/32
+Address = ${IPV6}/128
+DNS = 1.1.1.1, 2606:4700:4700::1111
+MTU = 1280
+Table = off
+
+PostUp = ip -4 rule add fwmark 0xca6c lookup ${WARP_TBL_V4}
+PostUp = ip -6 rule add fwmark 0xca6c lookup ${WARP_TBL_V6}
+PostUp = ip -4 route add default dev warp table ${WARP_TBL_V4}
+PostUp = ip -6 route add default dev warp table ${WARP_TBL_V6}
+PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100
+PostUp = ip -6 rule add from ${VPS_IPV6} lookup main priority 100
+PostDown = ip -4 rule del fwmark 0xca6c lookup ${WARP_TBL_V4}
+PostDown = ip -6 rule del fwmark 0xca6c lookup ${WARP_TBL_V6}
+PostDown = ip -4 route del default dev warp table ${WARP_TBL_V4}
+PostDown = ip -6 route del default dev warp table ${WARP_TBL_V6}
+PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100
+PostDown = ip -6 rule del from ${VPS_IPV6} lookup main priority 100
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 162.159.193.1:2408
+PersistentKeepalive = 25
+EOF
+    chmod 600 /etc/wireguard/warp.conf
+
+    # 启动 kernel wireguard module（Debian 13 默认带 1.0.0，用户空间 wireguard-go 也可）
+    if [ ! -d /sys/module/wireguard ]; then
+        modprobe wireguard 2>/dev/null || {
+            msg_warn "kernel 无 wireguard 模块，回退安装 wireguard-go userspace 二进制"
+            local ARCH; ARCH=$(uname -m); case "$ARCH" in x86_64) WARCH=amd64;; aarch64|arm64) WARCH=arm64;; *) WARCH=amd64;; esac
+            local WGO_TGZ="/tmp/wireguard-go.tgz"
+            curl -sL --max-time 30 "https://github.com/WireGuard/wireguard-go/releases/download/0.0.20230223/wireguard-go-${WARCH}.tar.gz" -o "$WGO_TGZ" 2>/dev/null
+            if [ -s "$WGO_TGZ" ]; then
+                tar -xzf "$WGO_TGZ" -C /tmp/ 2>/dev/null
+                install -m755 /tmp/wireguard-go*/wireguard-go /usr/local/bin/ 2>/dev/null
+            fi
+            if ! command -v wireguard-go >/dev/null; then
+                msg_error "wirguard-go 二进制无法获取，WARP 上不了"
+                return 1
+            fi
+            # 让 ip link add warp type wireguard 走 userspace
+            export WG_ENDIAN=klein
+            echo "wireguard-go userspace 后端将用于 warp interface"
+        }
+    fi
+
+    # ip link add + wg setconf（避免 wg-quick 的 PostUp/PostDown 副作用）
+    ip link delete warp 2>/dev/null || true
+    ip link add warp type wireguard 2>/dev/null
+    wg setconf warp /etc/wireguard/warp.conf
+    ip link set mtu 1280 up dev warp
+
+    # firewall：plan B 下 NAT64 device 把 192.168.255.0/24 加到 main table，避免 NAT64
+    # 回环到 fwmark 51820。注释放在 PostUp 里了。
+
+    # systemd unit 持久化：开机自动起 warp
+    cat > /etc/systemd/system/warp-sb.service <<'UNIT'
+[Unit]
+Description=SCloud Sing-box WARP (kernel wireguard + fwmark routing)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'wg setconf warp /etc/wireguard/warp.conf && ip link set mtu 1280 up dev warp'
+ExecStop=/bin/sh -c 'ip link delete warp 2>/dev/null; true'
+RestartSec=3
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now warp-sb.service
+
+    msg_success "WARP tunnel 部署完成（fwmark table ${WARP_TBL_V4}/${WARP_TBL_V6}）。wg show warp 可查状态。"
+    return 0
 }
+
 
 generate_config() {
     mkdir -p "$SB_DIR"
