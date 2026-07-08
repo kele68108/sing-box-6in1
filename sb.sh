@@ -581,7 +581,7 @@ generate_config() {
     { "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40000 },
     { "type": "block", "tag": "block-out" }
   ],
-  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out" }
+  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out", "default_domain_resolver": "dns-ipv6" }
 }
 EOF
     save_config
