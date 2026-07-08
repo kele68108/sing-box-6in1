@@ -159,6 +159,42 @@ EOF
 
 is_alpine() { [ -f /etc/alpine-release ]; }
 
+# 检测当前主机是否为纯 IPv6（无 IPv4 公网出口但 IPv6 正常）
+# 仅测 TCP HTTPS 不准：WARP / NAT64 可以让 curl -4 work，但 sing-box 的 UDP DNS 走 Go runtime
+# 在某些 IPv6-only host 上仍 fail。必须测 UDP/53 直接性。
+is_ipv6_only() {
+    local probe
+    probe=$(
+        python3 - <<'PY' 2>/dev/null
+import socket, select
+for host in ('1.1.1.1', '8.8.8.8'):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(2.5)
+        # DNS query for "test" A record
+        q = bytes.fromhex("12340100000100000000000000000474657374000000010001")
+        s.sendto(q, (host, 53))
+        r = select.select([s], [], [], 2.5)
+        if r[0]:
+            print("v4udp_ok")
+            break
+    except Exception:
+        continue
+PY
+    )
+    [ "$probe" = "v4udp_ok" ] && return 1
+    return 0
+}
+
+# 根据网络环境选择 DNS 上游和解析策略
+pick_dns_config() {
+    if is_ipv6_only; then
+        echo "[2606:4700:4700::1111] prefer_ipv4"
+    else
+        echo "1.1.1.1 ipv4_only"
+    fi
+}
+
 svc_action() {
     local action="$1"; local service="$2"
     if is_alpine; then
@@ -490,6 +526,10 @@ generate_config() {
         [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
     fi
 
+    # 不管 VPS 网络环境如何，DNS 上游走 IPv6（UDP socket 在 IPv6 only host 上直接可达）
+    # 同时保留 1.1.1.1 作为 fallback，让 dual-stack host 也能用
+    local DNSSERVERS='[ { "tag": "dns-ipv6", "type": "udp", "server": "[2606:4700:4700::1111]" }, { "tag": "dns-ipv4", "type": "udp", "server": "1.1.1.1" } ]'
+
     local INBOUNDS=""
 
     if [ "$ENABLE_ARGO" == "1" ]; then
@@ -528,9 +568,10 @@ generate_config() {
 {
   "log": { "level": "warn", "timestamp": true },
   "dns": {
-    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "1.1.1.1" } ],
-    "final": "dns-remote",
-    "strategy": "ipv4_only"
+    "servers": $DNSSERVERS,
+    "final": "dns-ipv6",
+    "strategy": "prefer_ipv4",
+    "independent_cache": true
   },
   "inbounds": [
     $INBOUNDS
