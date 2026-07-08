@@ -469,18 +469,49 @@ install_argo() {
     fi
 }
 
+# 安装 WireProxy (SOCKS5 over Cloudflare WARP)
+# 当启用 SB_INSTALL_WIREPROXY=1 时，sb.sh 在 install_warp() 之外额外装 WireProxy，
+# WireProxy 在 127.0.0.1:40000 暴露 SOCKS5。可选模块，默认不装（direct outbound 走内核 fwmark routing 更稳）。
+install_wireproxy() {
+    [ "${SB_INSTALL_WIREPROXY:-0}" != "1" ] && return 0
+    if is_alpine; then return; fi
+    if [ -x /usr/local/bin/wireproxy ]; then msg_info "WireProxy 已存在"; return 0; fi
+    msg_info "正在下载 WireProxy..."
+    local ARCH; ARCH=$(uname -m)
+    local WARCH
+    case "$ARCH" in
+        x86_64)        WARCH=amd64 ;;
+        aarch64|arm64) WARCH=arm64 ;;
+        *) msg_error "不支持的架构 $ARCH"; return 1 ;;
+    esac
+    local VER="v1.1.2"
+    local URL="https://github.com/windtf/wireproxy/releases/download/${VER}/wireproxy_linux_${WARCH}.tar.gz"
+    local TMP; TMP=$(mktemp -d); cd "$TMP" || return 1
+    if ! safe_download "$URL" wireproxy.tar.gz; then cd /; rm -rf "$TMP"; return 1; fi
+    tar -xzf wireproxy.tar.gz
+    install -m755 wireproxy /usr/local/bin/wireproxy
+    cd /; rm -rf "$TMP"
+    mkdir -p /etc/wireproxy
+    msg_success "WireProxy 已安装：/usr/local/bin/wireproxy"
+}
+
 install_warp() {
     if is_alpine; then return; fi
     if ! command -v warp-cli >/dev/null 2>&1; then
+        # 优先 apt 安装 cloudflare-warp（DIST=trixie/bookworm 这种 LTS 才有 release 包）。
+        # 注意：Debian sid/testing 的 cloudflare-client repo 经常没对应 main 包，需要 fallback。
         msg_info "正在安装 Cloudflare WARP..."
         if command -v apt-get >/dev/null 2>&1; then
             mkdir -p /usr/share/keyrings
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null
             local dist_codename=""
             if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
             else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-            apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" > /etc/apt/sources.list.d/cloudflare-client.list 2>/dev/null
+            apt-get update -y >/dev/null 2>&1
+            apt-get install -y cloudflare-warp >/dev/null 2>&1
+            # 清理失败的 source list 以防日后 apt update 报错
+            [ ! -x /usr/bin/warp-cli ] && rm -f /etc/apt/sources.list.d/cloudflare-client.list
         elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
         else return 1; fi
     fi
@@ -488,6 +519,14 @@ install_warp() {
         warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
         warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
     fi
+    # 兜底：即使 warp-cli 没装成，也调用 fscarmen/menu.sh 部署 WireGuard interface 模式。
+    # 这是真实能让 WARP 接管出网的方式（fwmark table 51820 + wireguard-go）。
+    if [ -f /etc/wireguard/menu.sh ] && [ ! -x /usr/local/bin/warp-cli ] && ! pgrep -f wireguard-go >/dev/null 2>&1; then
+        msg_info "调用 WARP menu.sh (wireguard-go + fwmark routing) 兜底..."
+        bash /etc/wireguard/menu.sh o >/dev/null 2>&1 || true
+    fi
+    # 可选：SB_INSTALL_WIREPROXY=1 时附带装 wireproxy
+    install_wireproxy
 }
 
 generate_config() {
@@ -578,7 +617,7 @@ generate_config() {
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" },
-    { "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40000 },
+    { "type": "direct", "tag": "warp-out", "bind_interface": "warp" },
     { "type": "block", "tag": "block-out" }
   ],
   "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out", "default_domain_resolver": "dns-ipv6" }
