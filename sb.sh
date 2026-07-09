@@ -562,19 +562,28 @@ install_warp() {
     fi
 
     # === 阶段 2：注册设备 + 提取 identity ================================
-    # 关键：禁掉 warp-svc daemon，否则它会安装 nftables hijack outbound IPv4
-    #       在 pure IPv6 主机上直接锁 SSH。我们只用 warp-cli 注册 + 拿 key，
-    #       真正的 wireguard interface 由 kernel module + 自己 fwmark 接管。
-    systemctl disable --now warp-svc >/dev/null 2>&1 || true
+    # 关键：warp-cli 是 client，必须 warp-svc daemon 起来才能连上注册设备。
+    # 注册完后立刻 stop+disable daemon (避免它的 nftables 把 outbound
+    # IPv4/v6 全部 hijack, 在 pure IPv6 上还可能锁 SSH)。真正的 wireguard
+    # interface 由 kernel module + 自己 fwmark 接管。
+    systemctl enable --now warp-svc >/dev/null 2>&1
+    # 等 daemon ready (warp-cli connect IPC socket 通常 1-2s)
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        systemctl is-active warp-svc >/dev/null 2>&1 && break
+        sleep 1
+    done
 
     local REG="/var/lib/cloudflare-warp/registration.json"
     [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
     if [ ! -f "$REG" ]; then
         msg_info "首次注册 Cloudflare WARP 设备..."
         warp-cli --accept-tos registration new >/dev/null 2>&1 || {
+            systemctl disable --now warp-svc >/dev/null 2>&1 || true
             msg_warn "warp-cli registration new 失败 (pure IPv6 + NAT64 没起来?), WARP 跳过"; return 1
         }
     fi
+    # 注册完成, 立刻 stop+disable daemon, 避免 daemon 接管出网
+    systemctl disable --now warp-svc >/dev/null 2>&1 || true
     local PRIV IPV4 IPV6
     PRIV=$(jq -r '.warp.private_key // empty' "$REG" 2>/dev/null)
     IPV4=$(jq -r '.warp.interface.addresses.v4 // empty' "$REG" 2>/dev/null)
