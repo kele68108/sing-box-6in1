@@ -425,6 +425,9 @@ register_warp_api() {
     
     msg_info "正在通过 Cloudflare API 注册内建 WARP 账户..."
     
+    # 核心修复：纯 IPv6 机器必须开启 NAT64 才能访问 IPv4-only 的 CF 注册 API
+    bootstrap_network
+
     local wg_keys warp_pub install_id fcm_token response client_id
     wg_keys=$($SB_BIN generate wireguard-keypair 2>/dev/null)
     WARP_PRIV=$(echo "$wg_keys" | awk '/PrivateKey/ {print $2}')
@@ -445,6 +448,9 @@ register_warp_api() {
           "model": "PC",
           "locale": "zh_CN"
         }')
+
+    # 注册完成后立刻恢复网络，防止 NAT64 污染后续正常流量
+    restore_network
 
     WARP_IPV4=$(echo "$response" | jq -r '.config.interface.addresses.v4')
     WARP_IPV6=$(echo "$response" | jq -r '.config.interface.addresses.v6')
