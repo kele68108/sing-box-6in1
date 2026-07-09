@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Sing-box 6-in-1
+# Sing-box 5-in-1 
 # ==========================================
 
 # --- 扩展视觉与色彩引擎 ---
@@ -26,59 +26,44 @@ print_logo() {
     echo -e "${PURPLE}┃${NC}   ${CYAN}███████║██║██║ ╚████║╚██████╔╝      ██████╔╝╚██████╔╝██╔╝ ██╗${NC}   ${PURPLE}┃${NC}"
     echo -e "${PURPLE}┃${NC}   ${CYAN}╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝       ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${NC}   ${PURPLE}┃${NC}"
     divider
-    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 6-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
+    echo -e "${PURPLE}┃${NC}          ${YELLOW}${BOLD}✨ Kele's Sing-box 5-in-1 极致稳定架构 (v6.6) ✨${NC}         ${PURPLE}┃${NC}"
     echo -e "${PURPLE}╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯${NC}"
     echo ""
 }
 
 # --- 全局变量 ---
 
-# JSON字符串转义（防止用户输入破坏config.json）
 json_escape() {
     local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\t'/\\t}"
+    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//$'\n'/\\n}"; s="${s//$'\r'/\\r}"; s="${s//$'\t'/\\t}"
     printf '%s' "$s"
 }
 
-# URL编码（防止特殊字符污染订阅链接）
 url_encode() {
-    local s="$1"
-    local result=""
-    local i c
-    # IPv6地址含方括号时，保留方括号不编码
+    local s="$1"; local result=""; local i c
     for ((i=0; i<${#s}; i++)); do
         c="${s:$i:1}"
-        if [[ "$c" =~ ^[a-zA-Z0-9_.~%-\[\]]+$ ]]; then
-            result+="$c"
-        else
-            result+=$(printf '%%%02X' "'$c")
-        fi
+        if [[ "$c" =~ ^[a-zA-Z0-9_.~%-\[\]]+$ ]]; then result+="$c"
+        else result+=$(printf '%%%02X' "'$c"); fi
     done
     printf '%s' "$result"
 }
 
-# 检测systemd是否支持append语法
 systemd_supports_append() {
     if command -v systemctl >/dev/null 2>&1; then
         local ver
         ver=$(systemd --version 2>/dev/null | head -n1 | grep -oE '[0-9]+' | head -n1)
-        if [ -n "$ver" ] && [ "$ver" -ge 240 ]; then
-            return 0
-        fi
+        if [ -n "$ver" ] && [ "$ver" -ge 240 ]; then return 0; fi
     fi
     return 1
 }
+
 SB_DIR="/etc/sing-box"
 SB_CONF="${SB_DIR}/config.json"
 SB_INFO="${SB_DIR}/install.info"
 SB_BIN="/usr/local/bin/sing-box"
-ARGO_BIN="/usr/local/bin/cloudflared"
-ARGO_LOG="${SB_DIR}/argo.log"
 SB_LOG="${SB_DIR}/sing-box.log"
+NEED_RESTORE_RESOLV=0
 
 [[ $EUID -ne 0 ]] && msg_error "必须以 root 用户运行此脚本！" && exit 1
 
@@ -90,9 +75,6 @@ if [[ "$0" != "/usr/bin/sb" ]]; then
         chmod +x /usr/bin/sb
         msg_success "快捷指令 'sb' 已就绪，以后直接输入 sb 即可唤出面板！"
         sleep 1
-    else
-        msg_warn "检测到内存管道执行，跳过快捷指令 'sb' 生成。如需生成，请将脚本下载到本地执行。"
-        sleep 2
     fi
 fi
 
@@ -100,29 +82,25 @@ load_config() {
     [ -f "$SB_INFO" ] && source "$SB_INFO"
     [ -z "$VD_MODE" ] && VD_MODE="2"
     [ -z "$VD_DOMAIN" ] && VD_DOMAIN=""
-    # 模式迁移：自签证书已被内核弃用跳过证书检测能力，迁移老配置
-    # 旧 VD_MODE=2 表示"自签伪装"，如今 = mode 1 (关闭 TLS)
-    # 旧 VD_MODE=3 表示"真实证书"，合并到新 mode 2
-    if [ "$VD_MODE" == "2" ] && [ -z "$VD_DOMAIN" ]; then
-        VD_MODE="1"
-    elif [ "$VD_MODE" == "3" ]; then
-        VD_MODE="2"
-    fi
+    if [ "$VD_MODE" == "2" ] && [ -z "$VD_DOMAIN" ]; then VD_MODE="1"
+    elif [ "$VD_MODE" == "3" ]; then VD_MODE="2"; fi
     [ -z "$ENABLE_VD" ] && ENABLE_VD="1"
     [ -z "$ENABLE_RE" ] && ENABLE_RE="1"
     [ -z "$ENABLE_HY" ] && ENABLE_HY="1"
     [ -z "$ENABLE_TC" ] && ENABLE_TC="1"
     [ -z "$ENABLE_S5" ] && ENABLE_S5="1"
-    [ -z "$ENABLE_ARGO" ] && ENABLE_ARGO="1"
     [ -z "$HY_HOPPING" ] && HY_HOPPING="0"
     [ -z "$HY_PORTS" ] && HY_PORTS=""
+    [ -z "$WARP_PRIV" ] && WARP_PRIV=""
+    [ -z "$WARP_IPV4" ] && WARP_IPV4=""
+    [ -z "$WARP_IPV6" ] && WARP_IPV6=""
+    [ -z "$WARP_RESERVED" ] && WARP_RESERVED=""
 }
 
 save_config() {
     cat > "$SB_INFO" << EOF
 UUID_VD=$UUID_VD
 UUID_RE=$UUID_RE
-UUID_ARGO=$UUID_ARGO
 UUID_TC=$UUID_TC
 PW_HY=$PW_HY
 PW_TC=$PW_TC
@@ -139,10 +117,11 @@ REALITY_SNI=$REALITY_SNI
 REALITY_SHORT_ID=$REALITY_SHORT_ID
 WARP_MODE=$WARP_MODE
 WARP_DOMAINS=$WARP_DOMAINS
+WARP_PRIV=$WARP_PRIV
+WARP_IPV4=$WARP_IPV4
+WARP_IPV6=$WARP_IPV6
+WARP_RESERVED=$WARP_RESERVED
 CUSTOM_IP=$CUSTOM_IP
-ARGO_MODE=$ARGO_MODE
-ARGO_TOKEN=$ARGO_TOKEN
-ARGO_DOMAIN=$ARGO_DOMAIN
 VD_MODE=$VD_MODE
 VD_DOMAIN=$VD_DOMAIN
 ENABLE_VD=$ENABLE_VD
@@ -150,7 +129,6 @@ ENABLE_RE=$ENABLE_RE
 ENABLE_HY=$ENABLE_HY
 ENABLE_TC=$ENABLE_TC
 ENABLE_S5=$ENABLE_S5
-ENABLE_ARGO=$ENABLE_ARGO
 HY_HOPPING=$HY_HOPPING
 HY_PORTS=$HY_PORTS
 EOF
@@ -158,6 +136,25 @@ EOF
 }
 
 is_alpine() { [ -f /etc/alpine-release ]; }
+
+# ================= 网络引导模块 =================
+bootstrap_network() {
+    if ! curl -s4 --connect-timeout 3 https://github.com >/dev/null && curl -s6 --connect-timeout 3 https://google.com >/dev/null; then
+        msg_warn "检测到纯 IPv6 环境，临时注入 NAT64 DNS 以确保能下载底层依赖..."
+        cp /etc/resolv.conf /etc/resolv.conf.bak
+        echo -e "nameserver 2a00:1098:2b::1\nnameserver 2a01:4f8:c2c:123f::1\nnameserver 2606:4700:4700::1111" > /etc/resolv.conf
+        NEED_RESTORE_RESOLV=1
+        sleep 2
+    fi
+}
+
+restore_network() {
+    if [ "$NEED_RESTORE_RESOLV" == "1" ] && [ -f "/etc/resolv.conf.bak" ]; then
+        msg_info "依赖安装完毕，恢复系统原始 IPv6 DNS..."
+        mv -f /etc/resolv.conf.bak /etc/resolv.conf
+    fi
+}
+# ================================================
 
 svc_action() {
     local action="$1"; local service="$2"
@@ -187,9 +184,6 @@ check_port_usage() {
     if command -v ss >/dev/null 2>&1; then
         ss -tuln | grep -qE ":[0-9]*$port\>" && return 1
         ss -uuln | grep -qE ":[0-9]*$port\>" && return 1
-    elif command -v netstat >/dev/null 2>&1; then
-        netstat -tuln | grep -qE ":[0-9]*$port\>" && return 1
-        netstat -uuln | grep -qE ":[0-9]*$port\>" && return 1
     fi
     return 0
 }
@@ -198,10 +192,7 @@ get_random_port() {
     local port
     while true; do
         port=$(( ((RANDOM << 15) | RANDOM) % 50000 + 10000 ))
-        if check_port_usage "$port"; then
-            echo "$port"
-            return 0
-        fi
+        if check_port_usage "$port"; then echo "$port"; return 0; fi
     done
 }
 
@@ -262,16 +253,22 @@ ask_port_range() {
     done
 }
 
+# 修正原生 IP 探测探针，优先检测 IPv6
 get_outbound_ip() {
     local ip=""
-    for i in 1 2 3; do
-        ip=$(curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null); [ -n "$ip" ] && break
-        ip=$(curl -s4 --max-time 5 https://ifconfig.me/ip 2>/dev/null); [ -n "$ip" ] && break
-        ip=$(curl -s4 --max-time 5 https://ip.gs 2>/dev/null); [ -n "$ip" ] && break
+    for i in 1 2; do
         ip=$(curl -s6 --max-time 5 https://api6.ipify.org 2>/dev/null); [ -n "$ip" ] && break
         ip=$(curl -s6 --max-time 5 ipv6.ip.sb 2>/dev/null); [ -n "$ip" ] && break
         sleep 1
     done
+    [ -n "$ip" ] && { echo "[$ip]"; return 0; }
+    
+    for i in 1 2; do
+        ip=$(curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null); [ -n "$ip" ] && break
+        ip=$(curl -s4 --max-time 5 https://ifconfig.me/ip 2>/dev/null); [ -n "$ip" ] && break
+        sleep 1
+    done
+    
     if [ -z "$ip" ]; then
         msg_error "无法自动探测公网IP，请确保网络连通或手动指定IP/域名。"
         echo "127.0.0.1"
@@ -391,7 +388,6 @@ install_singbox() {
     if [ ! -f "$SB_BIN" ]; then
         local ARCH S_ARCH TAG
         ARCH=$(uname -m); case "${ARCH}" in x86_64) S_ARCH="amd64" ;; aarch64|arm64) S_ARCH="arm64" ;; *) msg_error "不支持的架构"; exit 1 ;; esac
-        # 仅拉取最新 stable 版（过滤 prerelease == true），避免使用 alpha 内核
         TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" | jq -r '.[] | select(.prerelease == false) | .tag_name' 2>/dev/null | head -n 1)
         if [ -z "$TAG" ] || [ "$TAG" == "null" ]; then
             TAG=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | jq -r '.tag_name' 2>/dev/null)
@@ -406,7 +402,6 @@ install_singbox() {
     fi
 }
 
-# 生成Reality密钥对，增加健壮性校验
 generate_reality_keys() {
     local keys
     keys=$($SB_BIN generate reality-keypair 2>/dev/null)
@@ -423,46 +418,58 @@ generate_reality_keys() {
     return 0
 }
 
-install_argo() {
-    if [ ! -f "$ARGO_BIN" ]; then
-        local ARCH A_ARCH
-        ARCH=$(uname -m); case "${ARCH}" in x86_64) A_ARCH="amd64" ;; aarch64|arm64) A_ARCH="arm64" ;; *) msg_error "不支持的架构"; return 1 ;; esac
-        if safe_download "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${A_ARCH}" "$ARGO_BIN"; then
-            chmod +x "$ARGO_BIN"
-        fi
-    fi
-}
+# ================= 内建 API WARP 注册模块 =================
+register_warp_api() {
+    if is_alpine; then return 0; fi
+    if [ -n "$WARP_IPV4" ] && [ -n "$WARP_PRIV" ]; then return 0; fi
+    
+    msg_info "正在通过 Cloudflare API 注册内建 WARP 账户..."
+    
+    local wg_keys warp_pub install_id fcm_token response client_id
+    wg_keys=$($SB_BIN generate wireguard-keypair 2>/dev/null)
+    WARP_PRIV=$(echo "$wg_keys" | awk '/PrivateKey/ {print $2}')
+    warp_pub=$(echo "$wg_keys" | awk '/PublicKey/ {print $2}')
 
-install_warp() {
-    if is_alpine; then return; fi
-    if ! command -v warp-cli >/dev/null 2>&1; then
-        msg_info "正在安装 Cloudflare WARP..."
-        if command -v apt-get >/dev/null 2>&1; then
-            mkdir -p /usr/share/keyrings
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-            local dist_codename=""
-            if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
-            else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-            apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
-        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
-        else return 1; fi
+    install_id=$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 22)
+    fcm_token="${install_id}:APA91b$(tr -dc 'a-zA-Z0-9' </dev/urandom | head -c 134)"
+
+    response=$(curl -s -X POST "https://api.cloudflareclient.com/v0a884/reg" \
+        -H "User-Agent: okhttp/3.12.1" \
+        -H "CF-Client-Version: a-6.11-2223" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "key": "'"${warp_pub}"'",
+          "install_id": "'"${install_id}"'",
+          "fcm_token": "'"${fcm_token}"'",
+          "tos": "'$(date -u +%FT%T.000Z)'",
+          "model": "PC",
+          "locale": "zh_CN"
+        }')
+
+    WARP_IPV4=$(echo "$response" | jq -r '.config.interface.addresses.v4')
+    WARP_IPV6=$(echo "$response" | jq -r '.config.interface.addresses.v6')
+    client_id=$(echo "$response" | jq -r '.config.client_id')
+
+    WARP_RESERVED=$(echo "$client_id" | base64 -d 2>/dev/null | od -An -tu1 -N3 | awk '{print "["$1", "$2", "$3"]'} 2>/dev/null)
+    [ -z "$WARP_RESERVED" ] && WARP_RESERVED="[0,0,0]"
+
+    if [ -z "$WARP_IPV4" ] || [ "$WARP_IPV4" == "null" ]; then
+        msg_error "WARP API 注册失败，请检查网络或稍后重试！"
+        return 1
     fi
-    if command -v warp-cli >/dev/null 2>&1; then
-        warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
-        warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
-    fi
+    msg_success "内建 WARP 账户生成成功: 分配 IP $WARP_IPV4"
+    save_config
+    return 0
 }
+# ==========================================================
 
 generate_config() {
     mkdir -p "$SB_DIR"
 
-    # 基础输入安全过滤：禁止JSON破坏性字符进入域名类变量
     VD_DOMAIN="${VD_DOMAIN//\\/}"; VD_DOMAIN="${VD_DOMAIN//\"/}"
     REALITY_SNI="${REALITY_SNI//\\/}"; REALITY_SNI="${REALITY_SNI//\"/}"
     WARP_DOMAINS="${WARP_DOMAINS//\\/}"; WARP_DOMAINS="${WARP_DOMAINS//\"/}"
 
-    # 强制证书检查：任何 TLS 协议都依赖真实证书（自签已被内核弃用跳过证书检测能力后不可用）
     local needs_tls=false
     [ "$ENABLE_VD" == "1" ] && [ "$VD_MODE" != "1" ] && needs_tls=true
     [ "$ENABLE_HY" == "1" ] && needs_tls=true
@@ -470,19 +477,32 @@ generate_config() {
     if [ "$needs_tls" == "true" ] && [ ! -f "${SB_DIR}/server.crt" ]; then
         if [ -n "$VD_DOMAIN" ]; then
             msg_warn "检测到证书缺失，正在为 ${VD_DOMAIN} 自动申请一次..."
-            if ! apply_cert "$VD_DOMAIN"; then
-                msg_error "证书申请失败，无法继续！"
-                return 1
-            fi
+            if ! apply_cert "$VD_DOMAIN"; then return 1; fi
         else
             msg_error "需要真实域名证书，但 ${SB_DIR}/server.crt 不存在！"
-            msg_error "请先在协议管理中填入域名并申请证书。"
             return 1
         fi
     fi
 
+    # 智能路由与内置 WARP 出站
     local rules_json='{"outbound": "direct-out"}'
-    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then rules_json='{"outbound": "warp-out"}'
+    local warp_outbound='{ "type": "block", "tag": "warp-out" }'
+    
+    if [ "$WARP_MODE" != "1" ] && [ -n "$WARP_PRIV" ]; then
+        warp_outbound='{
+          "type": "wireguard",
+          "tag": "warp-out",
+          "server": "engage.cloudflareclient.com",
+          "server_port": 2408,
+          "local_address": [ "'${WARP_IPV4}'/32", "'${WARP_IPV6}'/128" ],
+          "private_key": "'${WARP_PRIV}'",
+          "peer_public_key": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+          "reserved": '${WARP_RESERVED}'
+        }'
+    fi
+
+    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then 
+        rules_json='{ "ip_version": 4, "outbound": "warp-out" }, { "ip_version": 6, "outbound": "direct-out" }'
     elif [ "$WARP_MODE" == "3" ] && ! is_alpine && [ -n "$WARP_DOMAINS" ]; then
         IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local domain_array=""
         for d in "${DOMAINS[@]}"; do [ -n "$d" ] && domain_array+="\"$d\","; done
@@ -491,10 +511,6 @@ generate_config() {
     fi
 
     local INBOUNDS=""
-
-    if [ "$ENABLE_ARGO" == "1" ]; then
-        INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-argo\", \"listen\": \"127.0.0.1\", \"listen_port\": 10086, \"users\": [ { \"uuid\": \"$UUID_ARGO\", \"flow\": \"\" } ], \"transport\": { \"type\": \"ws\", \"path\": \"/argo\" } },"
-    fi
 
     if [ "$ENABLE_RE" == "1" ]; then
         INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-reality\", \"listen\": \"::\", \"listen_port\": $PORT_RE, \"users\": [ { \"uuid\": \"$UUID_RE\", \"flow\": \"xtls-rprx-vision\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$REALITY_SNI\", \"reality\": { \"enabled\": true, \"handshake\": { \"server\": \"$REALITY_SNI\", \"server_port\": 443 }, \"private_key\": \"$REALITY_PRK\", \"short_id\": [ \"\" ] } } },"
@@ -507,7 +523,6 @@ generate_config() {
             INBOUNDS="$INBOUNDS { \"type\": \"vless\", \"tag\": \"in-vless\", \"listen\": \"::\", \"listen_port\": $PORT_VD, \"users\": [ { \"uuid\": \"$UUID_VD\", \"flow\": \"\" } ], \"tls\": { \"enabled\": true, \"server_name\": \"$VD_DOMAIN\", \"certificate_path\": \"${SB_DIR}/server.crt\", \"key_path\": \"${SB_DIR}/server.key\" }, \"transport\": { \"type\": \"ws\", \"path\": \"/ws\" } },"
         else
             msg_error "VLESS-WS TLS 模式 (VD_MODE=$VD_MODE) 配置异常：开启 TLS 必须先填入域名并申请证书！"
-            msg_error "请到 \033[1;33m协议管理 → [1] 修改 VLESS\033[0m 选择 [2] 申请真实证书。"
             return 1
         fi
     fi
@@ -528,8 +543,11 @@ generate_config() {
 {
   "log": { "level": "warn", "timestamp": true },
   "dns": {
-    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "2606:4700:4700::1111" } ],
-    "final": "dns-remote",
+    "servers": [
+      { "tag": "dns-v6", "type": "udp", "server": "2606:4700:4700::1111" },
+      { "tag": "dns-v4", "type": "udp", "server": "1.1.1.1" }
+    ],
+    "final": "dns-v6",
     "strategy": "prefer_ipv6"
   },
   "inbounds": [
@@ -537,7 +555,7 @@ generate_config() {
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" },
-    { "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40000 },
+    $warp_outbound,
     { "type": "block", "tag": "block-out" }
   ],
   "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out" }
@@ -546,9 +564,7 @@ EOF
     save_config
 }
 
-# --- 防火墙端口跳跃模块 (带高级冲突规避) ---
 apply_iptables() {
-    # 彻底清洗老规则
     while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
     while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
     while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
@@ -559,7 +575,6 @@ apply_iptables() {
         start_port=$(echo "$HY_PORTS" | cut -d'-' -f1)
         end_port=$(echo "$HY_PORTS" | cut -d'-' -f2)
 
-        # 核心逻辑：为 TUIC 和 SOCKS5 建立豁免通道，防止被 Hy2 规则强行劫持
         if [ "$ENABLE_TC" == "1" ] && [ -n "$PORT_TC" ]; then
             iptables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
             ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_TC" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
@@ -569,7 +584,6 @@ apply_iptables() {
             ip6tables -t nat -A PREROUTING -p udp --dport "$PORT_S5" -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null
         fi
 
-        # 建立跳跃劫持规则
         iptables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
         ip6tables -t nat -A PREROUTING -p udp --dport "${start_port}:${end_port}" -m comment --comment "hy2-hopping" -j REDIRECT --to-ports "$PORT_HY" 2>/dev/null
     fi
@@ -577,11 +591,6 @@ apply_iptables() {
 
 setup_services() {
     apply_iptables
-
-    local ARGO_CMD="$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto"
-    if [ "$ARGO_MODE" == "fixed" ] && [ -n "$ARGO_TOKEN" ]; then
-        ARGO_CMD="$ARGO_BIN tunnel run --token $(printf '%q' "$ARGO_TOKEN")"
-    fi
 
     if is_alpine; then
         cat > /etc/init.d/sing-box << 'RCINIT'
@@ -594,44 +603,16 @@ output_log="SB_LOG_PLACEHOLDER"
 error_log="SB_LOG_PLACEHOLDER"
 RCINIT
         sed -i "s|SB_BIN_PLACEHOLDER|$SB_BIN|g; s|SB_CONF_PLACEHOLDER|$SB_CONF|g; s|SB_LOG_PLACEHOLDER|$SB_LOG|g" /etc/init.d/sing-box
-
-        cat > /etc/init.d/sb-argo << 'RCINIT'
-#!/sbin/openrc-run
-command="ARGO_BIN_PLACEHOLDER"
-command_args="ARGO_CMD_PLACEHOLDER"
-command_background=true
-pidfile="/var/run/sb-argo.pid"
-output_log="ARGO_LOG_PLACEHOLDER"
-error_log="ARGO_LOG_PLACEHOLDER"
-RCINIT
-        local _argo_args="${ARGO_CMD#* }"
-        sed -i "s|ARGO_BIN_PLACEHOLDER|$ARGO_BIN|g; s|ARGO_CMD_PLACEHOLDER|$_argo_args|g; s|ARGO_LOG_PLACEHOLDER|$ARGO_LOG|g" /etc/init.d/sb-argo
-        chmod +x /etc/init.d/sing-box /etc/init.d/sb-argo
+        chmod +x /etc/init.d/sing-box
     else
-        local sb_std argo_std
-        if systemd_supports_append; then
-            sb_std="StandardOutput=append:$SB_LOG\nStandardError=append:$SB_LOG"
-            argo_std="StandardOutput=append:$ARGO_LOG\nStandardError=append:$ARGO_LOG"
-        else
-            sb_std="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"
-            argo_std="StandardOutput=file:$ARGO_LOG\nStandardError=file:$ARGO_LOG"
-        fi
+        local sb_std
+        if systemd_supports_append; then sb_std="StandardOutput=append:$SB_LOG\nStandardError=append:$SB_LOG"
+        else sb_std="StandardOutput=file:$SB_LOG\nStandardError=file:$SB_LOG"; fi
         printf '%b\n' "[Unit]" "Description=Sing-box Core Service" "After=network.target" "[Service]" "ExecStart=$SB_BIN run -c $SB_CONF" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "LimitNOFILE=1048576" "WorkingDirectory=$SB_DIR" "$sb_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sing-box.service
-        if [ "$ARGO_MODE" == "temp" ] || [ -z "$ARGO_TOKEN" ]; then
-            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel --url http://127.0.0.1:10086 --no-autoupdate --edge-ip-version auto" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$argo_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
-        else
-            printf '%b\n' "[Unit]" "Description=Argo Tunnel for Sing-box" "After=network.target" "[Service]" "ExecStart=$ARGO_BIN tunnel run --token $ARGO_TOKEN" "Restart=always" "RestartSec=3" "StartLimitInterval=0" "WorkingDirectory=$SB_DIR" "$argo_std" "[Install]" "WantedBy=multi-user.target" > /etc/systemd/system/sb-argo.service
-        fi
         svc_action reload
     fi
 
     svc_action enable sing-box; svc_action restart sing-box
-
-    if [ "$ENABLE_ARGO" == "1" ]; then
-        svc_action enable sb-argo; svc_action restart sb-argo
-    else
-        svc_action stop sb-argo >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
-    fi
 }
 
 check_existing() {
@@ -649,16 +630,17 @@ install_fast() {
     echo -e "${BG_PURPLE} 一键极速部署 ${NC} ${YELLOW}开始部署全协议...${NC}\n"
     check_existing || return
 
-    install_deps; install_singbox; install_argo
+    bootstrap_network
+    install_deps; install_singbox
 
-    # 强制要求真实域名证书（内核已弃用跳过证书检测，自签证书不再可用）
     echo -e "\n${BG_RED} 强制证书 ${NC} ${RED}脚本强制要求使用真实域名证书！${NC}"
-    msg_warn "sing-box 等主流内核即将弃用\"跳过证书检测\"功能，自签证书已不可用，必须先申请真实证书。"
+    msg_warn "sing-box 等主流内核即将弃用\"跳过证书检测\"功能，必须先申请真实证书。"
     echo ""
     while true; do
         reading "请输入一个已解析到此 VPS 的真实域名 (例如: vpn.example.com)" vd_input
         if [ -z "$vd_input" ]; then
             msg_error "域名不能为空，已取消一键部署。"
+            restore_network
             return 1
         fi
         VD_DOMAIN="$vd_input"
@@ -670,11 +652,11 @@ install_fast() {
     done
 
     UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    UUID_TC=$(cat /proc/sys/kernel/random/uuid)
     PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
-    ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1; ENABLE_ARGO=1
+    ENABLE_VD=1; ENABLE_RE=1; ENABLE_HY=1; ENABLE_TC=1; ENABLE_S5=1
 
     msg_info "正在自动分配系统可用端口..."
     PORT_VD=$(get_random_port); PORT_RE=$(get_random_port); PORT_HY=$(get_random_port)
@@ -683,22 +665,26 @@ install_fast() {
     msg_info "正在生成 Reality 专属密钥对..."
     if ! generate_reality_keys; then
         msg_error "Reality 密钥生成失败，安装中止。"
+        restore_network
         exit 1
     fi
     REALITY_SHORT_ID=""
     REALITY_SNI="addons.mozilla.org"
 
-    ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
     WARP_MODE="1"; WARP_DOMAINS=""
-    VD_MODE="2"  # 一键部署：直接使用上面已申请的证书
+    VD_MODE="2" 
     HY_HOPPING="0"; HY_PORTS=""
+
+    register_warp_api
 
     msg_info "正在写入底层架构并启动守护进程..."
     if ! generate_config; then
         msg_error "配置生成失败，部署中止。"
+        restore_network
         exit 1
     fi
     setup_services
+    restore_network
     echo ""; msg_success "一键部署已完成！"; sleep 2
 }
 
@@ -707,16 +693,16 @@ install_custom() {
     echo -e "${BG_PURPLE} 自定义部署 ${NC} ${YELLOW}进入按需部署模式...${NC}\n"
     check_existing || return
 
-    install_deps; install_singbox; install_argo
+    bootstrap_network
+    install_deps; install_singbox
 
-    # 强制要求真实域名证书（内核已弃用跳过证书检测，自签证书不再可用）
     echo -e "\n${BG_RED} 强制证书 ${NC} ${RED}脚本强制要求使用真实域名证书！${NC}"
-    msg_warn "sing-box 等主流内核即将弃用\"跳过证书检测\"功能，自签证书已不可用，必须先申请真实证书。"
     echo ""
     while true; do
         reading "请输入一个已解析到此 VPS 的真实域名 (例如: vpn.example.com)" vd_input
         if [ -z "$vd_input" ]; then
             msg_error "域名不能为空，已取消自定义部署。"
+            restore_network
             return 1
         fi
         VD_DOMAIN="$vd_input"
@@ -728,7 +714,7 @@ install_custom() {
     done
 
     UUID_VD=$(cat /proc/sys/kernel/random/uuid); UUID_RE=$(cat /proc/sys/kernel/random/uuid)
-    UUID_ARGO=$(cat /proc/sys/kernel/random/uuid); UUID_TC=$(cat /proc/sys/kernel/random/uuid)
+    UUID_TC=$(cat /proc/sys/kernel/random/uuid)
     PW_HY=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10); PW_TC=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 10)
     S5_U="user"; S5_P=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
 
@@ -738,7 +724,6 @@ install_custom() {
     reading "启用 Hysteria 2 (UDP) [y/n] (默认 y)" c_hy; c_hy=${c_hy,,}; [ -z "$c_hy" ] && c_hy="y"; ENABLE_HY=$([[ "$c_hy" == "y" ]] && echo 1 || echo 0)
     reading "启用 TUIC v5 (UDP) [y/n] (默认 y)" c_tc; c_tc=${c_tc,,}; [ -z "$c_tc" ] && c_tc="y"; ENABLE_TC=$([[ "$c_tc" == "y" ]] && echo 1 || echo 0)
     reading "启用 SOCKS5 [y/n] (默认 y)" c_s5; c_s5=${c_s5,,}; [ -z "$c_s5" ] && c_s5="y"; ENABLE_S5=$([[ "$c_s5" == "y" ]] && echo 1 || echo 0)
-    reading "启用 Argo 隧道 [y/n] (默认 y)" c_ar; c_ar=${c_ar,,}; [ -z "$c_ar" ] && c_ar="y"; ENABLE_ARGO=$([[ "$c_ar" == "y" ]] && echo 1 || echo 0)
 
     echo -e "\n${BG_BLUE} 端口与参数分配 ${NC}"
     
@@ -750,17 +735,13 @@ install_custom() {
         ask_port "Reality 外网端口 (建议443，回车随机)" PORT_RE
         if [ -z "$PORT_RE" ]; then PORT_RE=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Reality 端口: ${GREEN}$PORT_RE${NC}"; fi
         msg_info "正在生成 Reality 密钥对..."
-        if ! generate_reality_keys; then
-            msg_error "Reality 密钥生成失败，安装中止。"
-            exit 1
-        fi
+        if ! generate_reality_keys; then exit 1; fi
         REALITY_SHORT_ID=""
         REALITY_SNI="addons.mozilla.org"
     fi
     if [ "$ENABLE_HY" == "1" ]; then
         ask_port "Hysteria2 外网端口 (回车随机)" PORT_HY
         if [ -z "$PORT_HY" ]; then PORT_HY=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 Hysteria2 端口: ${GREEN}$PORT_HY${NC}"; fi
-        
         reading "是否开启端口跳跃 (Port Hopping)? [y/n] (默认 n)" ph
         if [[ "${ph,,}" == "y" ]]; then
             HY_HOPPING=1
@@ -776,16 +757,17 @@ install_custom() {
         if [ -z "$PORT_S5" ]; then PORT_S5=$(get_random_port); echo -e "  ${CYAN}➤ 自动分配 SOCKS5 端口: ${GREEN}$PORT_S5${NC}"; fi
     fi
 
-    ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
     WARP_MODE="1"; WARP_DOMAINS=""
-    VD_MODE="2"  # 自定义部署：使用流程开头已申请的证书域名
+    VD_MODE="2" 
+    
+    register_warp_api
 
     echo ""; msg_info "正在写入底层架构并启动守护进程..."
     if ! generate_config; then
-        msg_error "配置生成失败，部署中止。"
-        exit 1
+        restore_network; exit 1
     fi
     setup_services
+    restore_network
     echo ""; msg_success "自定义部署已完成！"; sleep 2
 }
 
@@ -800,7 +782,6 @@ manage_protocols() {
         [ "$ENABLE_HY" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [3]\t🚀 修改 Hy2          ${YELLOW}(端口: $PORT_HY)${NC}"
         [ "$ENABLE_TC" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [4]\t🏎️ 修改 TUIC v5      ${YELLOW}(端口: $PORT_TC)${NC}"
         [ "$ENABLE_S5" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [5]\t🛡️ 修改 SOCKS5       ${YELLOW}(端口: $PORT_S5)${NC}"
-        [ "$ENABLE_ARGO" == "1" ] && printf '%b\n' "${PURPLE}┃${NC}  [6]\t☁️  配置 Argo 隧道    ${YELLOW}(模式: $ARGO_MODE)${NC}"
         echo -e "${PURPLE}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
         printf '%b\n' "${PURPLE}┃${NC}  ${RED}[7]\t🛑 停用/卸载单独协议${NC}"
         printf '%b\n' "${PURPLE}┃${NC}  [0]\t↩️  返回主菜单${NC}"
@@ -823,14 +804,9 @@ manage_protocols() {
                 if [ "$vm" == "2" ]; then
                     reading "请输入已解析到此VPS的真实域名" vd
                     if [ -n "$vd" ]; then
-                        if apply_cert "$vd"; then
-                            VD_MODE="2"; VD_DOMAIN="$vd"
-                        else
-                            msg_error "获取失败，放弃修改。"
-                        fi
-                    else
-                        msg_warn "操作取消。"
-                    fi
+                        if apply_cert "$vd"; then VD_MODE="2"; VD_DOMAIN="$vd"
+                        else msg_error "获取失败，放弃修改。"; fi
+                    else msg_warn "操作取消。"; fi
                 elif [[ "$vm" == "1" ]]; then VD_MODE="1"; VD_DOMAIN=""; fi
                 ;;
             2)
@@ -866,18 +842,6 @@ manage_protocols() {
                 ask_port "新 Socks5 端口 (回车不变)" p; [ -n "$p" ] && PORT_S5=$p
                 reading "新密码 (回车不变)" pw; [ -n "$pw" ] && S5_P=$pw
                 ;;
-            6)
-                [ "$ENABLE_ARGO" != "1" ] && continue
-                ask_uuid "新 Argo 独立 UUID (回车不变)" u; [ -n "$u" ] && UUID_ARGO=$u
-                reading "[1]=临时隧道(随机域名)  [2]=固定隧道 (直接回车保持不变)" am
-                if [ "$am" == "2" ]; then
-                    ARGO_MODE="fixed"
-                    while true; do reading "请输入绑定的固定域名" d; if [ -n "$d" ]; then ARGO_DOMAIN=$d; break; else msg_error "域名不能为空！"; fi; done
-                    while true; do reading "请输入 Cloudflare Token" t; if [ ${#t} -gt 50 ]; then ARGO_TOKEN=$t; break; else msg_error "Token 过短！"; fi; done
-                elif [ "$am" == "1" ]; then
-                    ARGO_MODE="temp"; ARGO_TOKEN=""; ARGO_DOMAIN=""
-                fi
-                ;;
             7)
                 echo -e "\n  ${YELLOW}请选择要停用的协议 (释放端口及资源)：${NC}"
                 [ "$ENABLE_VD" == "1" ] && echo "  [1] VLESS (WS)"
@@ -885,11 +849,10 @@ manage_protocols() {
                 [ "$ENABLE_HY" == "1" ] && echo "  [3] Hy2"
                 [ "$ENABLE_TC" == "1" ] && echo "  [4] TUIC v5"
                 [ "$ENABLE_S5" == "1" ] && echo "  [5] SOCKS5"
-                [ "$ENABLE_ARGO" == "1" ] && echo "  [6] Argo 隧道"
                 echo "  [0] 取消"
-                reading "选择停用目标 [0-6]" disable_choice
+                reading "选择停用目标 [0-5]" disable_choice
                 case $disable_choice in
-                    1) ENABLE_VD=0 ;; 2) ENABLE_RE=0 ;; 3) ENABLE_HY=0 ;; 4) ENABLE_TC=0 ;; 5) ENABLE_S5=0 ;; 6) ENABLE_ARGO=0 ;; 0) continue ;; *) msg_warn "无效输入"; sleep 1; continue ;;
+                    1) ENABLE_VD=0 ;; 2) ENABLE_RE=0 ;; 3) ENABLE_HY=0 ;; 4) ENABLE_TC=0 ;; 5) ENABLE_S5=0 ;; 0) continue ;; *) msg_warn "无效输入"; sleep 1; continue ;;
                 esac
                 msg_success "目标协议已标记为停用！"
                 ;;
@@ -914,8 +877,8 @@ manage_warp() {
     while true; do
         print_logo
         local mode_str="原生直连"
-        [ "$WARP_MODE" == "2" ] && mode_str="全局 WARP"
-        [ "$WARP_MODE" == "3" ] && mode_str="路由分流"
+        [ "$WARP_MODE" == "2" ] && mode_str="全局 WARP (智能分流)"
+        [ "$WARP_MODE" == "3" ] && mode_str="域名指定分流"
 
         echo -e "${PURPLE}╭━━━ 🌐 ${BG_BLUE} WARP 智能大脑 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         echo -e "${PURPLE}┃${NC} 当前模式: ${GREEN}$mode_str${NC}"
@@ -931,7 +894,11 @@ manage_warp() {
 
         reading "请选择操作 [0-4]" choice
         case $choice in
-            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
+            1) 
+                echo -e "  ➤ [1]=关闭  [2]=全局WARP (IPv6直连/IPv4走WARP)  [3]=指定分流"
+                reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm
+                [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && register_warp_api 
+                ;;
             2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
             3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
             4) WARP_DOMAINS="" ;;
@@ -945,7 +912,7 @@ show_nodes() {
     print_logo; [ ! -f "$SB_INFO" ] && msg_error "请先部署节点！" && sleep 1 && return
     load_config
 
-    msg_info "正在探测公网 IP (请稍候)..."
+    msg_info "正在探测原生公网 IP (优先检测 IPv6)..."
     out_ip=$(get_outbound_ip)
     msg_info "正在获取节点物理位置归属地..."
     NODE_PREFIX=$(get_country_prefix)
@@ -962,7 +929,7 @@ show_nodes() {
 
     echo -e "\n${CYAN}╭━━━━━━━━━━━━ 🔗 节点订阅凭证 ━━━━━━━━━━━━╮${NC}"
     local all_links=""
-    local link_re link1 link2 link3 link4 link5
+    local link_re link1 link3 link4 link5
 
     if [ "$ENABLE_RE" == "1" ]; then
         echo -e "${CYAN}┃${NC} 🎭 ${GREEN}[VLESS + Reality]${NC} (极致隐蔽直连)"
@@ -979,27 +946,6 @@ show_nodes() {
             link1="vless://${UUID_VD}@${VD_DOMAIN}:${PORT_VD}?encryption=none&security=tls&sni=${VD_DOMAIN}&type=ws&host=${VD_DOMAIN}&path=%2Fws#${NODE_PREFIX}-VLESS"
         fi
         echo -e "${CYAN}┃${NC}    ${link1}"; all_links+="$link1\n"
-    fi
-
-    if [ "$ENABLE_ARGO" == "1" ]; then
-        local argo_domain=""
-        if [ "$ARGO_MODE" == "temp" ]; then
-            for i in $(seq 1 10); do
-                [ -f "$ARGO_LOG" ] && argo_domain=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" "$ARGO_LOG" 2>/dev/null | tail -n 1 | sed 's/https:\/\///')
-                [ -n "$argo_domain" ] && break
-                sleep 2
-            done
-            [ -n "$argo_domain" ] && argo_type="临时随机隧道"
-        elif [ "$ARGO_MODE" == "fixed" ]; then
-            argo_domain="$ARGO_DOMAIN"; argo_type="固定专线隧道"
-        fi
-
-        echo -e "${CYAN}┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫${NC}"
-        echo -e "${CYAN}┃${NC} ☁️  ${GREEN}[VLESS + Argo]${NC} (${argo_type:-未就绪})"
-        if [ -n "$argo_domain" ]; then
-            link2="vless://${UUID_ARGO}@www.visa.com.sg:443?encryption=none&security=tls&sni=${argo_domain}&type=ws&host=${argo_domain}&path=%2Fargo#${NODE_PREFIX}-ARGO"
-            echo -e "${CYAN}┃${NC}    ${link2}"; all_links+="$link2\n"
-        else echo -e "${CYAN}┃${NC}    ${RED}(未能成功获取隧道域名，请稍后重试或检查日志)${NC}"; fi
     fi
 
     if [ "$ENABLE_HY" == "1" ]; then
@@ -1041,16 +987,16 @@ uninstall_script() {
     echo ""; for i in 3 2 1; do echo -e "${YELLOW}将在 $i 秒后开始清理...${NC}"; sleep 1; done
 
     msg_info "正在清理后台进程与残留文件..."
-    svc_action stop sing-box >/dev/null 2>&1; svc_action stop sb-argo >/dev/null 2>&1
-    svc_action disable sing-box >/dev/null 2>&1; svc_action disable sb-argo >/dev/null 2>&1
+    svc_action stop sing-box >/dev/null 2>&1
+    svc_action disable sing-box >/dev/null 2>&1
 
     while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
     while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping" -j REDIRECT 2>/dev/null; do :; done
     while iptables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
     while ip6tables -t nat -D PREROUTING -p udp -m comment --comment "hy2-hopping-exclude" -j ACCEPT 2>/dev/null; do :; done
 
-    if is_alpine; then rm -f /etc/init.d/sing-box /etc/init.d/sb-argo
-    else rm -f /etc/systemd/system/sing-box.service /etc/systemd/system/sb-argo.service; systemctl daemon-reload; fi
+    if is_alpine; then rm -f /etc/init.d/sing-box
+    else rm -f /etc/systemd/system/sing-box.service; systemctl daemon-reload; fi
 
     if command -v warp-cli >/dev/null 2>&1; then
         warp-cli disconnect >/dev/null 2>&1
@@ -1058,13 +1004,11 @@ uninstall_script() {
         elif command -v yum >/dev/null 2>&1; then yum remove -y cloudflare-warp >/dev/null 2>&1; fi
     fi
 
-    # 清理 sysctl 优化配置
     rm -f /etc/sysctl.d/99-singbox-optimize.conf
     sysctl --system >/dev/null 2>&1 || true
 
-    # 此处已删除 ! -name "sub.txt" 的限制，实现彻底销毁
     find "$SB_DIR" -type f -delete 2>/dev/null
-    rm -f "$SB_BIN" "$ARGO_BIN" "/usr/bin/sb"
+    rm -f "$SB_BIN" "/usr/bin/sb"
     msg_success "系统已恢复纯净状态，江湖再见！"; rm -f "$0"; exit 0
 }
 
@@ -1082,7 +1026,6 @@ main_menu() {
         printf '%b\n' "   ${GREEN}[4]${NC}\t🌐 调教 WARP 智能分流规则 (Alpine 系统不支持 WARP)"
         printf '%b\n' "   ${GREEN}[5]${NC}\t🔗 查看提取节点订阅链接"
         echo -e "   ${CYAN}──────────────────────────────────────────────────${NC}"
-        # 卸载菜单文字已更新，提示会清理所有数据
         printf '%b\n' "   ${RED}[9]${NC}\t🗑️ 彻底卸载"
         printf '%b\n' "   ${RED}[0]${NC}\t🚪 退出面板"
         echo ""
