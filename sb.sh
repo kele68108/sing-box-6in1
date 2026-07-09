@@ -631,10 +631,10 @@ install_warp() {
 # Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820
 # Source: fscarmen warp.cloudflare.now.cc public API
 # Format: wireguard-tools compatible (no wg-quick exclusive fields)
+# 注意: wg setconf 拒绝 DNS= MTU= Table= FwMark= 等额外字段,
+# 只接 PrivateKey / ListenPort / PublicKey / AllowedIPs / Endpoint / PersistentKeepalive
 [Interface]
 PrivateKey = ${PRIV}
-DNS = 1.1.1.1, 2606:4700:4700::1111
-MTU = 1280
 ListenPort = 0
 
 [Peer]
