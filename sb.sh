@@ -159,118 +159,6 @@ EOF
 
 is_alpine() { [ -f /etc/alpine-release ]; }
 
-# ---- IPv6-only 探测 & NAT64 Bootstrap (用完即焚) ----------------------------
-# 探测当前 VPS 的双栈状态，分别 ping 一下 v4 和 v6 的公网 IP 给出连接性。
-# 返回: 0=dual, 1=v4only, 2=v6only
-probe_v4_v6_connectivity() {
-    local v4 v6
-    timeout 4 python3 -c "import socket; socket.create_connection(('1.1.1.1',443),timeout=3); raise SystemExit(0)" 2>/dev/null; v4=$?
-    timeout 4 python3 -c "import socket; socket.create_connection(('2606:4700:4700::1111',443),3); raise SystemExit(0)" 2>/dev/null; v6=$?
-    if [ "$v4" = "0" ] && [ "$v6" = "0" ]; then echo 0; return
-    elif [ "$v4" = "0" ]; then echo 1; return
-    elif [ "$v6" = "0" ]; then echo 2; return
-    else echo 1; return   # 双栈全断就当 dual 处理, 让显式 IPv4 路径走完整链路
-    fi
-}
-
-# 严格 IPv6-only：没有 IPv4 default route + 没 IPv4 全球地址 + TCP/443v4 不通。
-# Cloudflare NAT64 prefix (64:ff9b::/96) 仅在 tayga 启动后才生效，所以这里只看
-# 系统 routing 状态，不假设 NAT64 已经存在。
-is_ipv6_only_strict() {
-    ip -4 route show default 2>/dev/null | grep -q . && return 1
-    [ -n "$(ip -4 addr show scope global 2>/dev/null | awk '/inet / {print $2}')" ] && return 1
-    timeout 4 python3 -c "import socket; socket.create_connection(('1.1.1.1',443),timeout=3); raise SystemExit(0)" 2>/dev/null && return 1
-    return 0
-}
-
-# 取 VPS 公网 IPv6（eth0 第一个 global scope inet6）
-get_vps_ipv6() {
-    ip -6 addr show scope global 2>/dev/null | awk '/inet6 / {print $2}' | cut -d/ -f1 | head -1
-}
-
-# 检测 tayga NAT64 是否已经被部署好（仅作 diagnostic, 当前 bootstrap 不用）
-nat64_active() {
-    [ -d /sys/class/net/nat64 ] || return 1
-    ip link show nat64 2>/dev/null | grep -q "state UP" || return 1
-    ip -6 route show 2>/dev/null | grep -q "^64:ff9b::/96 dev nat64" || return 1
-    ip -4 route show 2>/dev/null | grep -q "^192.168.255.0/24 dev nat64" || return 1
-    return 0
-}
-
-# 备份 /etc/resolv.conf。仅当 .sb.bak 不存在时才备份 (幂等)
-backup_resolv_conf() {
-    [ -f /etc/resolv.conf ] || return 1
-    [ -f /etc/resolv.conf.sb.bak ] && return 0
-    cp /etc/resolv.conf /etc/resolv.conf.sb.bak 2>/dev/null && return 0
-    return 1
-}
-
-# 把 /etc/resolv.conf 还原到 install 之前的状态，撤销 bootstrap。
-restore_resolv_conf() {
-    if [ -s /etc/resolv.conf.sb.bak ]; then
-        mv -f /etc/resolv.conf.sb.bak /etc/resolv.conf
-        msg_success "/etc/resolv.conf 已恢复原状，NAT64 Bootstrap 已撤销"
-    fi
-}
-
-# 纯 IPv6 VPS 的 NAT64 DNS 注入 (用完即焚，不依赖 tayga/unbound 自建)：
-# 1) 检测到 pure IPv6 时直接往 /etc/resolv.conf 写入公共 NAT64 DNS。
-#    这些 DNS 服务器 (fscarmen / Hetzner / Cloudflare IPv6 组合) 自带 DNS64 合成
-#    A → 64:ff9b::<A> AAAA；VPS provider 通常在网络层默认配置了 64:ff9b::/96
-#    NAT64 gateway, 所以 curl / apt 直接走 IPv6 socket 即可拿 IPv4 资源。
-# 2) 不需要自建 tayga NAT64 daemon, 不需要 unbound DNS64 转发。
-# 3) install_warp() 末尾调用 teardown_nat64_bootstrap() 把 /etc/resolv.conf
-#    还原回去, 日常 IPv4 全部交给 WARP tunnel 出网, 不再走公共 NAT64。
-inject_nat64_bootstrap() {
-    is_ipv6_only_strict || { msg_info "已检测到 IPv4 出口，跳过 NAT64 Bootstrap"; return 0; }
-
-    # 幂等: 已经注入过就不重复
-    if grep -q "2a00:1098:2b::1" /etc/resolv.conf 2>/dev/null; then
-        msg_info "NAT64 DNS 已就位 (复用)"
-        return 0
-    fi
-
-    msg_warn "检测到纯 IPv6 环境，临时注入公共 NAT64 DNS 以拉取底层依赖..."
-    backup_resolv_conf || msg_warn "resolv.conf 备份失败, 后续 teardown 手动恢复"
-    cat > /etc/resolv.conf <<EOF
-# sb.sh NAT64 Bootstrap — WARP 起来后自动撤销
-nameserver 2a00:1098:2b::1
-nameserver 2a01:4f8:c2c:123f::1
-nameserver 2606:4700:4700::1111
-EOF
-    sleep 2
-    msg_success "公共 NAT64 DNS 已注入 (用完即焚)"
-}
-
-# 撤销 NAT64 Bootstrap：mv 回原 /etc/resolv.conf 即可，无需停服务
-teardown_nat64_bootstrap() {
-    [ -s /etc/resolv.conf.sb.bak ] || return 0
-    restore_resolv_conf
-    msg_info "NAT64 Bootstrap 已撤销, 日常 IPv4 出站全部交给 WARP tunnel"
-}
-
-# 内部 helper：用于 install_warp() 各 return 1 路径前清理,
-# 避免 IPv6-only NAT64 注入残留 (.sb.bak 未清) 而 WARP 没起来
-_warp_phase_cleanup() {
-    is_ipv6_only_strict || return 0
-    [ -s /etc/resolv.conf.sb.bak ] || return 0
-    teardown_nat64_bootstrap
-}
-
-# 内部 helper: install_warp 失败但 NAT64 保留 (作为 IPv4 fallback)
-_warp_phase_cleanup_keep_nat64() {
-    is_ipv6_only_strict || return 0
-    if [ -s /etc/resolv.conf.sb.bak ]; then
-        msg_info "NAT64 DNS 保留 (IPv4 fallback path 仍可用)"
-    else
-        # Already teardown'd (e.g. caller came back via manage_warp after success)
-        # 不变
-        :
-    fi
-    return 0
-}
-# ---------------------------------------------------------------------------
-
 svc_action() {
     local action="$1"; local service="$2"
     if is_alpine; then
@@ -424,9 +312,6 @@ EOF
 }
 
 install_deps() {
-    # 纯 IPv6 环境只要 NAT64 Bootstrap 起来, 后续 apt/curl 都能拿 IPv4 endpoints。
-    inject_nat64_bootstrap
-
     echo ""; msg_info "正在检查并安装基础依赖环境 (包含 iptables)..."
     if is_alpine; then
         apk update >/dev/null 2>&1
@@ -548,211 +433,25 @@ install_argo() {
     fi
 }
 
-# 安装 WARP：自建 kernel wireguard tunnel，绝不依赖 cloudflare-warp 的 warp-svc
-# daemon（它会装 nftables rules hijack 出网, pure IPv6 主机上会锁 SSH）。
-# 流程：cloudflare-warp apt 包拿 warp-cli 注册设备 → 提取 private_key →
-#       /etc/wireguard/warp.conf + ip link add warp type wireguard →
-#       iptables fwmark 0xca6c → systemd 持久化。
-# 若是 IPv6-only VPS：进入 install_warp 前 inject_nat64_bootstrap 已经到位；
-# WARP tunnel up 后立即调用 teardown_nat64_bootstrap 解开 NAT64, 后续 IPv4
-# 全部走 warp tunnel, 避免公共 NAT64 拖垮节点稳定性。
 install_warp() {
     if is_alpine; then return; fi
-
-    # 设计原则：完全绕开 warp-svc daemon (它的 nftables rules 会在第一次
-    # 启动时锁住 SSH outbound/inbound, 在 IPv6-only + NAT64 环境下
-    # warp-cli connect wireserver 亦会卡死)。
-    # 改用 fscarmen 的 Cloudflare WARP 公共注册 endpoint (WARP 注册 JSON
-    # 含 private_key + assigned v6 + 接口 endpoint)。fscarmen menu.sh line 2323 展示
-    # 的完整 schema。完全不需 daemon, 不装 cloudflare-warp。
-
-    # === 阶段 1：通过 fscarmen API 注册 WARP 设备 ========================
-    mkdir -p /etc/wireguard
-    local WG_OUT="/etc/wireguard/warp.conf"
-    msg_info "通过 fscarmen 公共 API 注册 Cloudflare WARP (NAT64 友好)..."
-    local API_URL="https://warp.cloudflare.now.cc/?run=register"
-    local RESP=""
-    if ! RESP=$(curl --max-time 30 -fsL "$API_URL" 2>/dev/null) || [ -z "$RESP" ]; then
-        msg_warn "fscarmen API 不可达 / 限流 (Cloudflare 1015); WARP tunnel 跳过"
-        msg_info "  提示: 等几分钟再重试, 或在 manage_warp menu 里手动启用"
-        _warp_phase_cleanup
-        return 1
+    if ! command -v warp-cli >/dev/null 2>&1; then
+        msg_info "正在安装 Cloudflare WARP..."
+        if command -v apt-get >/dev/null 2>&1; then
+            mkdir -p /usr/share/keyrings
+            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+            local dist_codename=""
+            if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
+            else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+            apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
+        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
+        else return 1; fi
     fi
-    # 验证返回是 JSON 含 private_key 字段
-    if ! echo "$RESP" | jq -e '.private_key' >/dev/null 2>&1; then
-        echo "$RESP" | head -c 200 | sed 's/^/  /'
-        msg_warn "fscarmen API 返回缺 private_key, WARP 跳过"
-        _warp_phase_cleanup
-        return 1
+    if command -v warp-cli >/dev/null 2>&1; then
+        warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
+        warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
     fi
-
-    # 解析字段: fscarmen 服务器里 json schema 含
-    #   .private_key (base64 EC 32-byte) — match private_key field
-    #   .key (base64 EC 32-byte public) — fscarmen 简化版 present key
-    #   .interface.v6 (assigned IPv6) — 当 fscarmen 返回 simplification 时 fallback
-    #   .endpoints[0].v4 / .endpoints[0].v6 — Cloudflare wireserver
-    # 全部 jq 取, 不存在就用默认 fallback (确保 IPv6-only VPS 也能工作)
-    local PRIV PUB IPV6 IPV4_ENDPT IPV6_ENDPT
-    PRIV=$(echo "$RESP" | jq -r '.private_key // empty')
-    PUB=$(echo "$RESP" | jq -r '.key // .public_key // empty')
-    # interface address (assigned by wireserver)
-    IPV6=$(echo "$RESP" | jq -r '.interface.v6 // .v6 // empty')
-    IPV4_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v4 // empty')
-    IPV6_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v6 // empty')
-    [ -z "$PRIV" ] && { msg_warn "无 private_key, WARP 跳过"; _warp_phase_cleanup; return 1; }
-    [ -z "$IPV6" ] && IPV6="2606:4700:110::2"
-    # Endpoint: IPv6-only VPS 优先用 v6 endpoint (走 eth0 不走 NAT64)
-    # 兜底 fallback 162.159.193.1:2408 (NAT64可达, 但延迟可能差)
-    if [ -n "$IPV6_ENDPT" ]; then
-        # IPV6_ENDPT 可能是 "[2606:4700:...]:2408" 或 "host:port"
-        # 提取 host 部分加端口号
-        local EP_HOST
-        EP_HOST=$(echo "$IPV6_ENDPT" | sed -E 's/^\[?([^]]+)\]?:[0-9]+$/\1/')
-        [ -n "$EP_HOST" ] && ENDPOINT_FINAL="$EP_HOST" || ENDPOINT_FINAL="engage.cloudflareclient.com"
-    elif [ -n "$IPV4_ENDPT" ]; then
-        ENDPOINT_FINAL=$(echo "$IPV4_ENDPT" | cut -d: -f1)
-        [ -n "$ENDPOINT_FINAL" ] || ENDPOINT_FINAL="engage.cloudflareclient.com"
-    else
-        # engage.cloudflareclient.com 是 Cloudflare 官方 SNI host 同时返回 v4+v6
-        ENDPOINT_FINAL="engage.cloudflareclient.com"
-    fi
-    msg_info "  device private_key: ${PRIV:0:16}..."
-    msg_info "  device public_key:  ${PUB:0:16}..."
-    msg_info "  assigned IPv6:      $IPV6"
-    msg_info "  wireserver endpoint: $ENDPOINT_FINAL:2408"
-    local VPS_IPV6
-    VPS_IPV6=$(get_vps_ipv6)
-
-    # === 阶段 2：写 /etc/wireguard/warp.conf (wireguard-tools 兼容格式) ====
-    # 注意: Debian 13 wireguard-tools v1.0.20210914 用 wg setconf 解析 conf 时
-    # 拒绝 `Address=` 和 `PostUp=` 字段 — 那是 wg-quick 专属格式.
-    # 我们手动 `ip addr add` + `ip rule` / `iptables` setup. 这种格式 wg setconf 接受.
-    cat > "$WG_OUT" <<EOF
-# Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820
-# Source: fscarmen warp.cloudflare.now.cc public API
-# Format: wireguard-tools compatible (no wg-quick exclusive fields)
-# 注意: wg setconf 拒绝 DNS= MTU= Table= FwMark= 等额外字段,
-# 只接 PrivateKey / ListenPort / PublicKey / AllowedIPs / Endpoint / PersistentKeepalive
-[Interface]
-PrivateKey = ${PRIV}
-ListenPort = 0
-
-[Peer]
-PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-AllowedIPs = 0.0.0.0/0
-AllowedIPs = ::/0
-Endpoint = ${ENDPOINT_FINAL}:2408
-PersistentKeepalive = 25
-EOF
-    chmod 600 "$WG_OUT"
-
-    # === 阶段 2.5: 手动配置 IP + fwmark routing (因为 conf 去 wg-quick 字段) =
-    # wireguard-tools conf 不支持 Address= PostUp=, 我们手动 ip addr add + rules.
-    # Address 172.16.0.2/32 是 WARP 内部 source IP (Cloudflare 协议栈校验 source).
-    # 加上 NAT64 fallback 路径 address 192.168.255.x 不被加 (避免 NAT64 device 冲突).
-    ip addr add 172.16.0.2/32 dev warp 2>/dev/null || true
-    [ -n "$IPV6" ] && ip addr add "${IPV6}/128" dev warp 2>/dev/null || true
-    # fwmark rule: 本机 system IPv4 outbound 走 warp tunnel (表 51820)
-    ip -4 rule add fwmark 0xca6c lookup 51820 2>/dev/null || true
-    ip -4 route add default dev warp table 51820 2>/dev/null || true
-
-    # === 阶段 3: 起 kernel wireguard (wg binary ALWAYS required) ==========
-    # 关键修正: 之前 modprobe 成功就跳 apt install wireguard-tools, 但 kernel
-    # wireguard module 跟 wg CLI 是两件事 — modprobe OK 也必须有 wg binary.
-    # 否则 wg setconf / wg show 全 fail. 这里 always try apt install.
-    DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
-    command -v wg >/dev/null || {
-        msg_warn "wg CLI 装不上 (apt install wireguard-tools 失败, NAT64 DNS 可能还没配)"
-        _warp_phase_cleanup
-        return 1
-    }
-    if ! modprobe wireguard 2>/dev/null; then
-        msg_warn "kernel wireguard module 加载失败"
-        _warp_phase_cleanup
-        return 1
-    fi
-    ip link delete warp 2>/dev/null || true
-    if ! ip link add warp type wireguard 2>/dev/null; then
-        msg_warn "ip link add warp 失败"
-        _warp_phase_cleanup
-        return 1
-    fi
-    if ! wg setconf warp "$WG_OUT" 2>/dev/null; then
-        msg_warn "wg setconf 失败 (wg CLI 异常?)"
-        _warp_phase_cleanup
-        return 1
-    fi
-    ip link set mtu 1280 up dev warp
-
-    # iptables fwmark: 本机 system IPv4 outbound 走 warp tunnel
-    iptables -t mangle -C OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null \
-        || iptables -t mangle -A OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null
-    iptables -t mangle -C OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null \
-        || iptables -t mangle -A OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null
-
-    # === 阶段 4：Handshake 验证 (不验等于没装) =========================
-    # 等 0-5s 期间发出 PersistentKeepalive 让 wireguard kernel 主动握一次手。
-    # 如果 5s 内没有 handshake → wireserver endpoint 拨号失败 (IPv4 literal or
-    # fqdn 解析不通), 我们 rollback warp + 保留 NAT64
-    msg_info "  等待 wireguard warp tunnel handshake (≤8s)..."
-    local HANDSHAKE_OK=0
-    for _try in 1 2 3 4 5 6 7 8; do
-        # wg show latest-handshakes: 列 peer latest_handshake_time (Unix nanosec, 0=never)
-        local HS
-        HS=$(wg show warp latest-handshakes 2>/dev/null | awk 'NR==2 {print $2}')
-        if [ -n "$HS" ] && [ "$HS" != "0" ]; then
-            HANDSHAKE_OK=1
-            break
-        fi
-        sleep 1
-    done
-    if [ $HANDSHAKE_OK -ne 1 ]; then
-        msg_warn "wireguard warp tunnel 8s 内未握手 (Cloudflare wireserver 不可达?), WARP tunnel 不可用"
-        msg_info "  → 撤销 warp interface + 保留 NAT64 bootstrap (IPv4 fallback 走 NAT64 gateway)"
-        ip link delete warp 2>/dev/null || true
-        # 不删 /etc/wireguard/warp.conf (用户可以 retry, 等到 wireserver 可达)
-        # 不 teardown NAT64 — 保留它作为 IPv4 fallback (sing-box selector health_check 直连走 NAT64)
-        _warp_phase_cleanup_keep_nat64
-        return 1
-    fi
-    msg_success "  warp handshake OK ($((HS/1000000000))s epoch)"
-    msg_info "  peer endpoint: $(wg show warp endpoints | awk 'NR==2 {print $2}')"
-
-    # === 阶段 4：systemd 持久化 (开机自动起 wg tunnel, daemon-free) =====
-    cat > /etc/systemd/system/warp-sb.service <<'UNIT'
-[Unit]
-Description=Sing-box WARP tunnel (kernel wireguard + fwmark, daemon-free)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/bin/sh -c 'wg setconf warp /etc/wireguard/warp.conf && ip link set mtu 1280 up dev warp'
-ExecStop=/bin/sh -c 'ip link delete warp 2>/dev/null; true'
-RestartSec=3
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-    systemctl daemon-reload
-    systemctl enable --now warp-sb.service >/dev/null 2>&1
-
-    msg_success "WARP tunnel 已部署 (fscarmen API + kernel wireguard + handshake verified, daemon-free)"
-    msg_info "  warp link: $(ip link show warp | grep -oE 'mtu [0-9]+' | head -1)"
-    msg_info "  endpoint: ${ENDPOINT_FINAL}:2408"
-    msg_info "  wireserver 握手时间: $(wg show warp latest-handshakes 2>/dev/null | awk 'NR==2 {print $2}')"
-
-    # === 阶段 5: 不 teardown NAT64 — 保留作 IPv4 fallback ===============
-    # 关键架构决定: WARP 即使 up, NAT64 仍保留作为 fallback. 原因:
-    # - sing-box outbound 走 warp-out 时, 如果 wireserver 临时 unreachable
-    #   (Cloudflare 维护等), warp tunnel 短断. NAT64 让 system curl/arp
-    #   仍能出网 (虽然增 latency, 但不死)
-    # - 用户在 manage_warp 改成 "全局 WARP 全 IPv4/IPv6 走 warp" 也可手动
-    #   通过 manage_warp menu 改 routing rule 删掉 NAT64 fallback
-    _warp_phase_cleanup_keep_nat64
-    return 0
 }
 
 generate_config() {
@@ -783,20 +482,12 @@ generate_config() {
     fi
 
     local rules_json='{"outbound": "direct-out"}'
-    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then
-        # 全局 WARP: 走 auto-warp selector (warp 失败 auto fallback 到 direct-out
-        # → IPv6 直连 + IPv4 走 NAT64 / system routing). 这样避免 "节点 -1" 只要
-        # WARP tunnel 短断. 只有 tunnel 实际 live 才走 warp tunnel.
-        rules_json='{"outbound": "auto-warp"}'
+    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then rules_json='{"outbound": "warp-out"}'
     elif [ "$WARP_MODE" == "3" ] && ! is_alpine && [ -n "$WARP_DOMAINS" ]; then
         IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local domain_array=""
         for d in "${DOMAINS[@]}"; do [ -n "$d" ] && domain_array+="\"$d\","; done
         domain_array=${domain_array%,}
-        [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"auto-warp\" }, { \"outbound\": \"direct-out\" }"
-    elif [ "$WARP_MODE" == "4" ] && ! is_alpine; then
-        # 原生 IPv6 直连 + 全部 IPv4 强走 WARP. WARP 短断时 auto-warp fallback 到
-        # direct-out (IPv4 走 system routing + NAT64) — IPv4 traffic 不死.
-        rules_json='{ "ip_version": 6, "outbound": "direct-out" }, { "ip_version": 4, "outbound": "auto-warp" }'
+        [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
     fi
 
     local INBOUNDS=""
@@ -837,24 +528,19 @@ generate_config() {
 {
   "log": { "level": "warn", "timestamp": true },
   "dns": {
-    "servers": [
-      { "tag": "dns-ipv6", "type": "udp", "server": "[2606:4700:4700::1111]" },
-      { "tag": "dns-ipv4", "type": "udp", "server": "1.1.1.1" }
-    ],
-    "final": "dns-ipv6",
-    "strategy": "prefer_ipv4",
-    "independent_cache": true
+    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "1.1.1.1" } ],
+    "final": "dns-remote",
+    "strategy": "ipv4_only"
   },
   "inbounds": [
     $INBOUNDS
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" },
-    { "type": "direct", "tag": "warp-out", "bind_interface": "warp" },
-    { "type": "selector", "tag": "auto-warp", "outbounds": ["warp-out", "direct-out"], "default": "warp-out", "interrupt_exist_connections": false },
+    { "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40000 },
     { "type": "block", "tag": "block-out" }
   ],
-  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out", "default_domain_resolver": "dns-ipv6" }
+  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out" }
 }
 EOF
     save_config
@@ -1230,7 +916,6 @@ manage_warp() {
         local mode_str="原生直连"
         [ "$WARP_MODE" == "2" ] && mode_str="全局 WARP"
         [ "$WARP_MODE" == "3" ] && mode_str="路由分流"
-        [ "$WARP_MODE" == "4" ] && mode_str="原生v6+WARP-v4"
 
         echo -e "${PURPLE}╭━━━ 🌐 ${BG_BLUE} WARP 智能大脑 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         echo -e "${PURPLE}┃${NC} 当前模式: ${GREEN}$mode_str${NC}"
@@ -1246,7 +931,7 @@ manage_warp() {
 
         reading "请选择操作 [0-4]" choice
         case $choice in
-            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流  [4]=原生v6+WARP-v4"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" || "$WARP_MODE" == "4" ]] && install_warp ;;
+            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
             2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
             3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
             4) WARP_DOMAINS="" ;;
