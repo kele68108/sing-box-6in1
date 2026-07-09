@@ -623,24 +623,19 @@ install_warp() {
     local VPS_IPV6
     VPS_IPV6=$(get_vps_ipv6)
 
-    # === 阶段 2：写 /etc/wireguard/warp.conf =============================
+    # === 阶段 2：写 /etc/wireguard/warp.conf (wireguard-tools 兼容格式) ====
+    # 注意: Debian 13 wireguard-tools v1.0.20210914 用 wg setconf 解析 conf 时
+    # 拒绝 `Address=` 和 `PostUp=` 字段 — 那是 wg-quick 专属格式.
+    # 我们手动 `ip addr add` + `ip rule` / `iptables` setup. 这种格式 wg setconf 接受.
     cat > "$WG_OUT" <<EOF
 # Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820
 # Source: fscarmen warp.cloudflare.now.cc public API
+# Format: wireguard-tools compatible (no wg-quick exclusive fields)
 [Interface]
 PrivateKey = ${PRIV}
-Address = 172.16.0.2/32
-Address = ${IPV6}/128
 DNS = 1.1.1.1, 2606:4700:4700::1111
 MTU = 1280
-Table = off
-
-PostUp = ip -4 rule add fwmark 0xca6c lookup 51820
-PostUp = ip -4 route add default dev warp table 51820
-PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100
-PostDown = ip -4 rule del fwmark 0xca6c lookup 51820
-PostDown = ip -4 route del default dev warp table 51820
-PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100
+ListenPort = 0
 
 [Peer]
 PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
@@ -651,7 +646,17 @@ PersistentKeepalive = 25
 EOF
     chmod 600 "$WG_OUT"
 
-    # === 阶段 3：起 kernel wireguard (wg binary ALWAYS required) ==========
+    # === 阶段 2.5: 手动配置 IP + fwmark routing (因为 conf 去 wg-quick 字段) =
+    # wireguard-tools conf 不支持 Address= PostUp=, 我们手动 ip addr add + rules.
+    # Address 172.16.0.2/32 是 WARP 内部 source IP (Cloudflare 协议栈校验 source).
+    # 加上 NAT64 fallback 路径 address 192.168.255.x 不被加 (避免 NAT64 device 冲突).
+    ip addr add 172.16.0.2/32 dev warp 2>/dev/null || true
+    [ -n "$IPV6" ] && ip addr add "${IPV6}/128" dev warp 2>/dev/null || true
+    # fwmark rule: 本机 system IPv4 outbound 走 warp tunnel (表 51820)
+    ip -4 rule add fwmark 0xca6c lookup 51820 2>/dev/null || true
+    ip -4 route add default dev warp table 51820 2>/dev/null || true
+
+    # === 阶段 3: 起 kernel wireguard (wg binary ALWAYS required) ==========
     # 关键修正: 之前 modprobe 成功就跳 apt install wireguard-tools, 但 kernel
     # wireguard module 跟 wg CLI 是两件事 — modprobe OK 也必须有 wg binary.
     # 否则 wg setconf / wg show 全 fail. 这里 always try apt install.
