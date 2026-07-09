@@ -541,53 +541,93 @@ install_warp() {
     # 设计原则：完全绕开 warp-svc daemon (它的 nftables rules 会在第一次
     # 启动时锁住 SSH outbound/inbound, 在 IPv6-only + NAT64 环境下
     # warp-cli connect wireserver 亦会卡死)。
-    # 改用 fscarmen 的 Cloudflare WARP 公共注册 endpoint, 直接拿 [Interface]+
-    # [Peer] 完整 wg conf (含 private_key / public_key / assigned v4+IPv6 接口),
-    # 然后 kernel wireguard + 自建 fwmark。完全不需要 daemon, 不装 cloudflare-warp。
+    # 改用 fscarmen 的 Cloudflare WARP 公共注册 endpoint (WARP 注册 JSON
+    # 含 private_key + assigned v6 + 接口 endpoint)。fscarmen menu.sh line 2323 展示
+    # 的完整 schema。完全不需 daemon, 不装 cloudflare-warp。
 
-    # === 阶段 1：拿 wg conf from fscarmen API ===
+    # === 阶段 1：通过 fscarmen API 注册 WARP 设备 ========================
     mkdir -p /etc/wireguard
     local WG_OUT="/etc/wireguard/warp.conf"
-    msg_info "通过 fscarmen 公共 API 注册 Cloudflare WARP 设备 (NAT64 友好)..."
-    # fscarmen endpoint: https://warp.cloudflare.now.cc/?run=register (or use API variable fallback)
+    msg_info "通过 fscarmen 公共 API 注册 Cloudflare WARP (NAT64 友好)..."
     local API_URL="https://warp.cloudflare.now.cc/?run=register"
-    local REG_FILE="/tmp/sb.warp.reg"
-    if ! curl -fsL --max-time 30 "$API_URL" -o "$REG_FILE" 2>/dev/null || [ ! -s "$REG_FILE" ]; then
-        msg_warn "fscarmen API 不可达, WARP tunnel 跳过 (NAT64 DNS 可能仍 active, 日常 IPv4 走 NAT64)";
+    local RESP=""
+    if ! RESP=$(curl --max-time 30 -fsL "$API_URL" 2>/dev/null) || [ -z "$RESP" ]; then
+        msg_warn "fscarmen API 不可达 / 限流 (Cloudflare 1015); WARP tunnel 跳过"
+        msg_info "  提示: 等几分钟再重试, 或在 manage_warp menu 里手动启用"
         return 1
     fi
-    # fscarmen 实际吐出文本格式 wg conf, 已含 PrivateKey / Address / PublicKey / Endpoint
-    # 但要确认格式兼容
-    if ! head -3 "$REG_FILE" | grep -q "\[Interface\]"; then
-        msg_warn "fscarmen API 返回格式异常 (前 3 行无 [Interface])"
-        head -3 "$REG_FILE" | sed 's/^/  /'
-        return 1
+    # 验证返回是 JSON 含 private_key 字段
+    if ! echo "$RESP" | jq -e '.private_key' >/dev/null 2>&1; then
+        echo "$RESP" | head -c 200 | sed 's/^/  /'
+        msg_warn "fscarmen API 返回缺 private_key, WARP 跳过"; return 1
     fi
-    # 套上我们的 fwmark + DNS 配置 (避免 daemon-mode hijack)
-    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
-    {
-        echo "# Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820"
-        # 提取接口部分但替换 DNS
-        grep -A20 "^\[Interface\]" "$REG_FILE" | sed -E 's|^DNS.*|DNS = 1.1.1.1, 2606:4700:4700::1111|; s|^MTU.*|MTU = 1280|; s|^Table.*|Table = off|'
-        # DNS 应该已经 set 了; 把 PostUp/PostDown 补上
-        echo "Table = off"
-        echo ""
-        echo "PostUp = ip -4 rule add fwmark 0xca6c lookup 51820"
-        echo "PostUp = ip -4 route add default dev warp table 51820"
-        [ -n "$VPS_IPV6" ] && echo "PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100"
-        echo "PostDown = ip -4 rule del fwmark 0xca6c lookup 51820"
-        echo "PostDown = ip -4 route del default dev warp table 51820"
-        [ -n "$VPS_IPV6" ] && echo "PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100"
-        echo ""
-        # Peer 部分保留
-        grep -A6 "^\[Peer\]" "$REG_FILE"
-        # 兜底: 如果 fscarmen 给的 Endpoint 是 IPv4 (162.159.193.1:2408),
-        # 我们纯 v6 主机拨过去需要 NAT64 gateway (OK, 已测试可工作)
-    } > "$WG_OUT"
-    chmod 600 "$WG_OUT"
-    rm -f "$REG_FILE"
 
-    # === 阶段 2：启动 kernel wireguard ================================
+    # 解析字段: fscarmen 服务器里 json schema 含
+    #   .private_key (base64 EC 32-byte) — match private_key field
+    #   .key (base64 EC 32-byte public) — fscarmen 简化版 present key
+    #   .interface.v6 (assigned IPv6) — 当 fscarmen 返回 simplification 时 fallback
+    #   .endpoints[0].v4 / .endpoints[0].v6 — Cloudflare wireserver
+    # 全部 jq 取, 不存在就用默认 fallback (确保 IPv6-only VPS 也能工作)
+    local PRIV PUB IPV6 IPV4_ENDPT IPV6_ENDPT
+    PRIV=$(echo "$RESP" | jq -r '.private_key // empty')
+    PUB=$(echo "$RESP" | jq -r '.key // .public_key // empty')
+    # interface address (assigned by wireserver)
+    IPV6=$(echo "$RESP" | jq -r '.interface.v6 // .v6 // empty')
+    IPV4_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v4 // empty')
+    IPV6_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v6 // empty')
+    [ -z "$PRIV" ] && { msg_warn "无 private_key, WARP 跳过"; return 1; }
+    [ -z "$IPV6" ] && IPV6="2606:4700:110::2"
+    # Endpoint: IPv6-only VPS 优先用 v6 endpoint (走 eth0 不走 NAT64)
+    # 兜底 fallback 162.159.193.1:2408 (NAT64可达, 但延迟可能差)
+    if [ -n "$IPV6_ENDPT" ]; then
+        # IPV6_ENDPT 可能是 "[2606:4700:...]:2408" 或 "host:port"
+        # 提取 host 部分加端口号
+        local EP_HOST
+        EP_HOST=$(echo "$IPV6_ENDPT" | sed -E 's/^\[?([^]]+)\]?:[0-9]+$/\1/')
+        [ -n "$EP_HOST" ] && ENDPOINT_FINAL="$EP_HOST" || ENDPOINT_FINAL="engage.cloudflareclient.com"
+    elif [ -n "$IPV4_ENDPT" ]; then
+        ENDPOINT_FINAL=$(echo "$IPV4_ENDPT" | cut -d: -f1)
+        [ -n "$ENDPOINT_FINAL" ] || ENDPOINT_FINAL="engage.cloudflareclient.com"
+    else
+        # engage.cloudflareclient.com 是 Cloudflare 官方 SNI host 同时返回 v4+v6
+        ENDPOINT_FINAL="engage.cloudflareclient.com"
+    fi
+    msg_info "  device private_key: ${PRIV:0:16}..."
+    msg_info "  device public_key:  ${PUB:0:16}..."
+    msg_info "  assigned IPv6:      $IPV6"
+    msg_info "  wireserver endpoint: $ENDPOINT_FINAL:2408"
+    local VPS_IPV6
+    VPS_IPV6=$(get_vps_ipv6)
+
+    # === 阶段 2：写 /etc/wireguard/warp.conf =============================
+    cat > "$WG_OUT" <<EOF
+# Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820
+# Source: fscarmen warp.cloudflare.now.cc public API
+[Interface]
+PrivateKey = ${PRIV}
+Address = 172.16.0.2/32
+Address = ${IPV6}/128
+DNS = 1.1.1.1, 2606:4700:4700::1111
+MTU = 1280
+Table = off
+
+PostUp = ip -4 rule add fwmark 0xca6c lookup 51820
+PostUp = ip -4 route add default dev warp table 51820
+PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100
+PostDown = ip -4 rule del fwmark 0xca6c lookup 51820
+PostDown = ip -4 route del default dev warp table 51820
+PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+AllowedIPs = 0.0.0.0/0
+AllowedIPs = ::/0
+Endpoint = ${ENDPOINT_FINAL}:2408
+PersistentKeepalive = 25
+EOF
+    chmod 600 "$WG_OUT"
+
+    # === 阶段 3：启 kernel wireguard ====================================
     if ! modprobe wireguard 2>/dev/null && ! is_alpine; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
         modprobe wireguard 2>/dev/null || true
@@ -598,12 +638,10 @@ install_warp() {
     fi
     ip link delete warp 2>/dev/null || true
     if ! ip link add warp type wireguard 2>/dev/null; then
-        msg_warn "ip link add warp type wireguard 失败 (kernel 缺 wireguard?)"
-        return 1
+        msg_warn "ip link add warp 失败"; return 1
     fi
     if ! wg setconf warp "$WG_OUT" 2>/dev/null; then
-        msg_warn "wg setconf 失败"
-        return 1
+        msg_warn "wg setconf 失败"; return 1
     fi
     ip link set mtu 1280 up dev warp
 
@@ -613,7 +651,7 @@ install_warp() {
     iptables -t mangle -C OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null \
         || iptables -t mangle -A OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null
 
-    # === 阶段 3：systemd 持久化 (开机自动起 wg tunnel) =================
+    # === 阶段 4：systemd 持久化 (开机自动起 wg tunnel, daemon-free) =====
     cat > /etc/systemd/system/warp-sb.service <<'UNIT'
 [Unit]
 Description=Sing-box WARP tunnel (kernel wireguard + fwmark, daemon-free)
@@ -636,9 +674,9 @@ UNIT
 
     msg_success "WARP tunnel 已部署 (fscarmen API + kernel wireguard + fwmark, daemon-free)"
     msg_info "  warp link: $(ip link show warp | grep -oE 'mtu [0-9]+' | head -1)"
-    msg_info "  endpoint: $(awk '/^\[Peer\]/,EOF' /etc/wireguard/warp.conf | grep Endpoint | head -1 | tr -d ' \n')"
+    msg_info "  endpoint: ${ENDPOINT_FINAL}:2408"
 
-    # === 阶段 4：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===========
+    # === 阶段 5：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===========
     # WARP up 后, 日常 IPv4 出站改走 warp tunnel (表 51820), 不再依赖 NAT64
     if is_ipv6_only_strict; then
         teardown_nat64_bootstrap
