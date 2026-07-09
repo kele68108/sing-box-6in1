@@ -566,21 +566,27 @@ install_warp() {
     # 注册完后立刻 stop+disable daemon (避免它的 nftables 把 outbound
     # IPv4/v6 全部 hijack, 在 pure IPv6 上还可能锁 SSH)。真正的 wireguard
     # interface 由 kernel module + 自己 fwmark 接管。
-    systemctl enable --now warp-svc >/dev/null 2>&1
-    # 等 daemon ready (warp-cli connect IPC socket 通常 1-2s)
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        systemctl is-active warp-svc >/dev/null 2>&1 && break
-        sleep 1
-    done
+    systemctl enable --now warp-svc >/dev/null 2>&1 || {
+        msg_warn "systemctl enable --now warp-svc 失败, WARP 跳过"; return 1
+    }
+    # 等 daemon 真正 ready (systemd active ≠ IPC socket ready, 实测 Debian 13
+    # trixie warp 2026.6 需要 1.5-3s。改 wait 与 daemon-aware retry 双保险)
+    sleep 3
 
     local REG="/var/lib/cloudflare-warp/registration.json"
     [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
     if [ ! -f "$REG" ]; then
         msg_info "首次注册 Cloudflare WARP 设备..."
-        warp-cli --accept-tos registration new >/dev/null 2>&1 || {
+        # 重试 3 次, 第一次常因 IPC socket 还没 listen 失败
+        local REG_OK=1
+        for try in 1 2 3 4 5; do
+            if warp-cli --accept-tos registration new 2>/dev/null; then REG_OK=0; break; fi
+            sleep 2
+        done
+        if [ $REG_OK -ne 0 ]; then
             systemctl disable --now warp-svc >/dev/null 2>&1 || true
-            msg_warn "warp-cli registration new 失败 (pure IPv6 + NAT64 没起来?), WARP 跳过"; return 1
-        }
+            msg_warn "warp-cli registration new 5 次都失败 (pure IPv6 + NAT64 没起来?), WARP 跳过"; return 1
+        fi
     fi
     # 注册完成, 立刻 stop+disable daemon, 避免 daemon 接管出网
     systemctl disable --now warp-svc >/dev/null 2>&1 || true
