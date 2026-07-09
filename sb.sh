@@ -256,6 +256,19 @@ _warp_phase_cleanup() {
     [ -s /etc/resolv.conf.sb.bak ] || return 0
     teardown_nat64_bootstrap
 }
+
+# 内部 helper: install_warp 失败但 NAT64 保留 (作为 IPv4 fallback)
+_warp_phase_cleanup_keep_nat64() {
+    is_ipv6_only_strict || return 0
+    if [ -s /etc/resolv.conf.sb.bak ]; then
+        msg_info "NAT64 DNS 保留 (IPv4 fallback path 仍可用)"
+    else
+        # Already teardown'd (e.g. caller came back via manage_warp after success)
+        # 不变
+        :
+    fi
+    return 0
+}
 # ---------------------------------------------------------------------------
 
 svc_action() {
@@ -638,13 +651,18 @@ PersistentKeepalive = 25
 EOF
     chmod 600 "$WG_OUT"
 
-    # === 阶段 3：启 kernel wireguard ====================================
-    if ! modprobe wireguard 2>/dev/null && ! is_alpine; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
-        modprobe wireguard 2>/dev/null || true
-    fi
-    if [ ! -d /sys/module/wireguard ]; then
-        msg_warn "kernel 无 wireguard 模块且无法 apt install wireguard-tools, WARP 跳过"
+    # === 阶段 3：起 kernel wireguard (wg binary ALWAYS required) ==========
+    # 关键修正: 之前 modprobe 成功就跳 apt install wireguard-tools, 但 kernel
+    # wireguard module 跟 wg CLI 是两件事 — modprobe OK 也必须有 wg binary.
+    # 否则 wg setconf / wg show 全 fail. 这里 always try apt install.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
+    command -v wg >/dev/null || {
+        msg_warn "wg CLI 装不上 (apt install wireguard-tools 失败, NAT64 DNS 可能还没配)"
+        _warp_phase_cleanup
+        return 1
+    }
+    if ! modprobe wireguard 2>/dev/null; then
+        msg_warn "kernel wireguard module 加载失败"
         _warp_phase_cleanup
         return 1
     fi
@@ -655,17 +673,45 @@ EOF
         return 1
     fi
     if ! wg setconf warp "$WG_OUT" 2>/dev/null; then
-        msg_warn "wg setconf 失败"
+        msg_warn "wg setconf 失败 (wg CLI 异常?)"
         _warp_phase_cleanup
         return 1
     fi
     ip link set mtu 1280 up dev warp
 
-    # iptables fwmark: 本机 system curl/apt 等 IPv4 outbound 走 warp tunnel
+    # iptables fwmark: 本机 system IPv4 outbound 走 warp tunnel
     iptables -t mangle -C OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null \
         || iptables -t mangle -A OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null
     iptables -t mangle -C OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null \
         || iptables -t mangle -A OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null
+
+    # === 阶段 4：Handshake 验证 (不验等于没装) =========================
+    # 等 0-5s 期间发出 PersistentKeepalive 让 wireguard kernel 主动握一次手。
+    # 如果 5s 内没有 handshake → wireserver endpoint 拨号失败 (IPv4 literal or
+    # fqdn 解析不通), 我们 rollback warp + 保留 NAT64
+    msg_info "  等待 wireguard warp tunnel handshake (≤8s)..."
+    local HANDSHAKE_OK=0
+    for _try in 1 2 3 4 5 6 7 8; do
+        # wg show latest-handshakes: 列 peer latest_handshake_time (Unix nanosec, 0=never)
+        local HS
+        HS=$(wg show warp latest-handshakes 2>/dev/null | awk 'NR==2 {print $2}')
+        if [ -n "$HS" ] && [ "$HS" != "0" ]; then
+            HANDSHAKE_OK=1
+            break
+        fi
+        sleep 1
+    done
+    if [ $HANDSHAKE_OK -ne 1 ]; then
+        msg_warn "wireguard warp tunnel 8s 内未握手 (Cloudflare wireserver 不可达?), WARP tunnel 不可用"
+        msg_info "  → 撤销 warp interface + 保留 NAT64 bootstrap (IPv4 fallback 走 NAT64 gateway)"
+        ip link delete warp 2>/dev/null || true
+        # 不删 /etc/wireguard/warp.conf (用户可以 retry, 等到 wireserver 可达)
+        # 不 teardown NAT64 — 保留它作为 IPv4 fallback (sing-box selector health_check 直连走 NAT64)
+        _warp_phase_cleanup_keep_nat64
+        return 1
+    fi
+    msg_success "  warp handshake OK ($((HS/1000000000))s epoch)"
+    msg_info "  peer endpoint: $(wg show warp endpoints | awk 'NR==2 {print $2}')"
 
     # === 阶段 4：systemd 持久化 (开机自动起 wg tunnel, daemon-free) =====
     cat > /etc/systemd/system/warp-sb.service <<'UNIT'
@@ -688,15 +734,19 @@ UNIT
     systemctl daemon-reload
     systemctl enable --now warp-sb.service >/dev/null 2>&1
 
-    msg_success "WARP tunnel 已部署 (fscarmen API + kernel wireguard + fwmark, daemon-free)"
+    msg_success "WARP tunnel 已部署 (fscarmen API + kernel wireguard + handshake verified, daemon-free)"
     msg_info "  warp link: $(ip link show warp | grep -oE 'mtu [0-9]+' | head -1)"
     msg_info "  endpoint: ${ENDPOINT_FINAL}:2408"
+    msg_info "  wireserver 握手时间: $(wg show warp latest-handshakes 2>/dev/null | awk 'NR==2 {print $2}')"
 
-    # === 阶段 5：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===========
-    # WARP up 后, 日常 IPv4 出站改走 warp tunnel (表 51820), 不再依赖 NAT64
-    if is_ipv6_only_strict; then
-        teardown_nat64_bootstrap
-    fi
+    # === 阶段 5: 不 teardown NAT64 — 保留作 IPv4 fallback ===============
+    # 关键架构决定: WARP 即使 up, NAT64 仍保留作为 fallback. 原因:
+    # - sing-box outbound 走 warp-out 时, 如果 wireserver 临时 unreachable
+    #   (Cloudflare 维护等), warp tunnel 短断. NAT64 让 system curl/arp
+    #   仍能出网 (虽然增 latency, 但不死)
+    # - 用户在 manage_warp 改成 "全局 WARP 全 IPv4/IPv6 走 warp" 也可手动
+    #   通过 manage_warp menu 改 routing rule 删掉 NAT64 fallback
+    _warp_phase_cleanup_keep_nat64
     return 0
 }
 
@@ -728,16 +778,20 @@ generate_config() {
     fi
 
     local rules_json='{"outbound": "direct-out"}'
-    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then rules_json='{"outbound": "warp-out"}'
+    if [ "$WARP_MODE" == "2" ] && ! is_alpine; then
+        # 全局 WARP: 走 auto-warp selector (warp 失败 auto fallback 到 direct-out
+        # → IPv6 直连 + IPv4 走 NAT64 / system routing). 这样避免 "节点 -1" 只要
+        # WARP tunnel 短断. 只有 tunnel 实际 live 才走 warp tunnel.
+        rules_json='{"outbound": "auto-warp"}'
     elif [ "$WARP_MODE" == "3" ] && ! is_alpine && [ -n "$WARP_DOMAINS" ]; then
         IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local domain_array=""
         for d in "${DOMAINS[@]}"; do [ -n "$d" ] && domain_array+="\"$d\","; done
         domain_array=${domain_array%,}
-        [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
+        [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"auto-warp\" }, { \"outbound\": \"direct-out\" }"
     elif [ "$WARP_MODE" == "4" ] && ! is_alpine; then
-        # 原生 IPv6 直连 + 全部 IPv4 强走 WARP (适合 dual-stack 和 pure IPv6 VPS,
-        # 避免 WARP 隧道里再套一层 IPv6 over IPv4)
-        rules_json='{ "ip_version": 6, "outbound": "direct-out" }, { "ip_version": 4, "outbound": "warp-out" }'
+        # 原生 IPv6 直连 + 全部 IPv4 强走 WARP. WARP 短断时 auto-warp fallback 到
+        # direct-out (IPv4 走 system routing + NAT64) — IPv4 traffic 不死.
+        rules_json='{ "ip_version": 6, "outbound": "direct-out" }, { "ip_version": 4, "outbound": "auto-warp" }'
     fi
 
     local INBOUNDS=""
@@ -792,6 +846,7 @@ generate_config() {
   "outbounds": [
     { "type": "direct", "tag": "direct-out" },
     { "type": "direct", "tag": "warp-out", "bind_interface": "warp" },
+    { "type": "selector", "tag": "auto-warp", "outbounds": ["warp-out", "direct-out"], "default": "warp-out", "interrupt_exist_connections": false },
     { "type": "block", "tag": "block-out" }
   ],
   "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out", "default_domain_resolver": "dns-ipv6" }
