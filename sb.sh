@@ -159,6 +159,157 @@ EOF
 
 is_alpine() { [ -f /etc/alpine-release ]; }
 
+# ---- IPv6-only 探测 & NAT64 Bootstrap (用完即焚) ----------------------------
+# 探测当前 VPS 的双栈状态，分别 ping 一下 v4 和 v6 的公网 IP 给出连接性。
+# 返回: 0=dual, 1=v4only, 2=v6only
+probe_v4_v6_connectivity() {
+    local v4 v6
+    timeout 4 python3 -c "import socket; socket.create_connection(('1.1.1.1',443),timeout=3); raise SystemExit(0)" 2>/dev/null; v4=$?
+    timeout 4 python3 -c "import socket; socket.create_connection(('2606:4700:4700::1111',443),3); raise SystemExit(0)" 2>/dev/null; v6=$?
+    if [ "$v4" = "0" ] && [ "$v6" = "0" ]; then echo 0; return
+    elif [ "$v4" = "0" ]; then echo 1; return
+    elif [ "$v6" = "0" ]; then echo 2; return
+    else echo 1; return   # 双栈全断就当 dual 处理, 让显式 IPv4 路径走完整链路
+    fi
+}
+
+# 严格 IPv6-only：没有 IPv4 default route + 没 IPv4 全球地址 + TCP/443v4 不通。
+# Cloudflare NAT64 prefix (64:ff9b::/96) 仅在 tayga 启动后才生效，所以这里只看
+# 系统 routing 状态，不假设 NAT64 已经存在。
+is_ipv6_only_strict() {
+    ip -4 route show default 2>/dev/null | grep -q . && return 1
+    [ -n "$(ip -4 addr show scope global 2>/dev/null | awk '/inet / {print $2}')" ] && return 1
+    timeout 4 python3 -c "import socket; socket.create_connection(('1.1.1.1',443),timeout=3); raise SystemExit(0)" 2>/dev/null && return 1
+    return 0
+}
+
+# 取 VPS 公网 IPv6（eth0 第一个 global scope inet6）
+get_vps_ipv6() {
+    ip -6 addr show scope global 2>/dev/null | awk '/inet6 / {print $2}' | cut -d/ -f1 | head -1
+}
+
+# 检测 tayga NAT64 是否已经被部署好（桥接 IPv6→IPv4 outbound）
+nat64_active() {
+    [ -d /sys/class/net/nat64 ] || return 1
+    ip link show nat64 2>/dev/null | grep -q "state UP" || return 1
+    ip -6 route show 2>/dev/null | grep -q "^64:ff9b::/96 dev nat64" || return 1
+    ip -4 route show 2>/dev/null | grep -q "^192.168.255.0/24 dev nat64" || return 1
+    return 0
+}
+
+# 备份 /etc/resolv.conf 到 .sb.bak，仅第一次有效。返回 0 表示已备份过
+_SB_RESOLV_BAK=""
+backup_resolv_conf() {
+    if [ -n "$_SB_RESOLV_BAK" ]; then return 0; fi
+    if [ ! -f /etc/resolv.conf ]; then return 1; fi
+    _SB_RESOLV_BAK=$(cat /etc/resolv.conf)
+    [ "$_SB_RESOLV_BAK" = "$(cat /etc/resolv.conf 2>/dev/null)" ] && cp /etc/resolv.conf /etc/resolv.conf.sb.bak 2>/dev/null
+    export _SB_RESOLV_BAK
+    return 0
+}
+
+# 把 /etc/resolv.conf 还原到 install 之前的状态，撤销 bootstrap。
+restore_resolv_conf() {
+    if [ -s /etc/resolv.conf.sb.bak ]; then
+        cat /etc/resolv.conf.sb.bak > /etc/resolv.conf 2>/dev/null
+        rm -f /etc/resolv.conf.sb.bak
+        _SB_RESOLV_BAK=""
+        export _SB_RESOLV_BAK
+        msg_success "/etc/resolv.conf 已恢复原状，NAT64 Bootstrap 已撤销"
+    fi
+}
+
+# 部署临时的 NAT64 + DNS64 bootstrap，仅在 IPv6-only 主机上启用。
+# 全部走本地 unbound 通道：把 /etc/resolv.conf 临时切到 127.0.0.1，
+# 等 WARP tunnel 起来后 install_warp() 末尾会调用 teardown_nat64_bootstrap() 回收。
+inject_nat64_bootstrap() {
+    is_ipv6_only_strict || { msg_info "已检测到 IPv4 出口，跳过 NAT64 Bootstrap"; return 0; }
+    backup_resolv_conf || { msg_warn "resolv.conf 备份失败"; return 1; }
+    [ -s /etc/resolv.conf.sb.bak ] || { msg_warn "首次启动 resolv.conf 备份缺失，无法 bootstrap"; return 1; }
+
+    if nat64_active && ss -tnlup 2>/dev/null | grep -qE ":53\b.*unbound"; then
+        cat > /etc/resolv.conf <<EOF
+# sb.sh NAT64 Bootstrap — WARP 起来后自动撤销
+nameserver 127.0.0.1
+EOF
+        msg_info "NAT64 Bootstrap 已就绪 (复用既有 unbound+tayga)"
+        return 0
+    fi
+
+    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
+    [ -z "$VPS_IPV6" ] && { msg_warn "VPS 公网 IPv6 探测失败，NAT64 装不下"; return 1; }
+
+    msg_info "检测到纯 IPv6 环境，部署临时 NAT64/DNS64 Bootstrap (WARP 起来后自动撤销)..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y tayga unbound >/dev/null 2>&1 || {
+        msg_warn "apt install tayga/unbound 失败，NAT64 Bootstrap 无法启用"; return 1
+    }
+    mkdir -p /var/lib/tayga
+    cat > /etc/tayga.conf <<EOF
+tun-device nat64
+ipv4-addr 192.168.255.1
+ipv6-addr ${VPS_IPV6}
+prefix 64:ff9b::/96
+dynamic-pool 192.168.255.0/24
+data-dir /var/lib/tayga
+EOF
+    systemctl enable --now tayga >/dev/null 2>&1
+    sleep 1; systemctl restart tayga >/dev/null 2>&1
+    sleep 2
+    ip link set nat64 up 2>/dev/null || true
+    ip addr add 192.168.255.1/32 dev nat64 2>/dev/null || true
+    ip -6 route add 64:ff9b::/96 dev nat64 2>/dev/null || true
+    ip -4 route add 192.168.255.0/24 dev nat64 2>/dev/null || true
+    sysctl -wq net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+
+    mkdir -p /etc/unbound/unbound.conf.d
+    cat > /etc/unbound/unbound.conf.d/dns64.conf <<'EOF'
+server:
+    module-config: "dns64 validator iterator"
+    interface: 0.0.0.0
+    interface: ::0
+    port: 53
+    do-ip4: yes
+    do-ip6: yes
+    do-udp: yes
+    do-tcp: yes
+    num-threads: 1
+    msg-cache-size: 4m
+    rrset-cache-size: 4m
+
+forward-zone:
+    name: "."
+    forward-addr: 2606:4700:4700::1111
+    forward-addr: 2001:4860:4860::8888
+EOF
+    systemctl enable --now unbound >/dev/null 2>&1
+    sleep 1; systemctl restart unbound >/dev/null 2>&1
+    sleep 1
+    if ! ss -tnlup 2>/dev/null | grep -qE ":53\b.*unbound"; then
+        msg_warn "unbound 未监听 :53, NAT64 Bootstrap 半失活, 请确认 systemd-resolved 没抢端口"
+    fi
+    nat64_active || { msg_warn "tayga/nat64 device 状态异常, IPv4 桥接可能不稳"; }
+    cat > /etc/resolv.conf <<EOF
+# sb.sh NAT64 Bootstrap — WARP 起来后自动撤销
+nameserver 127.0.0.1
+EOF
+    msg_success "NAT64/DNS64 Bootstrap 部署完成 (临时)"
+}
+
+# 撤销 bootstrap: 恢复 /etc/resolv.conf, 停 unbound + tayga。
+teardown_nat64_bootstrap() {
+    if [ ! -s /etc/resolv.conf.sb.bak ]; then
+        return 0
+    fi
+    restore_resolv_conf
+    # 用完即焚：停 unbound + tayga，让 WARP tunnel 接管所有 IPv4 出网
+    systemctl stop unbound >/dev/null 2>&1 || true
+    systemctl stop tayga >/dev/null 2>&1 || true
+    systemctl disable --now tayga unbound >/dev/null 2>&1 || true
+    ip link delete nat64 >/dev/null 2>&1 || true
+    msg_info "NAT64/DNS64 Bootstrap 已撤销, 日常 IPv4 出站全部交给 WARP tunnel"
+}
+# ---------------------------------------------------------------------------
+
 svc_action() {
     local action="$1"; local service="$2"
     if is_alpine; then
@@ -312,6 +463,9 @@ EOF
 }
 
 install_deps() {
+    # 纯 IPv6 环境只要 NAT64 Bootstrap 起来, 后续 apt/curl 都能拿 IPv4 endpoints。
+    inject_nat64_bootstrap
+
     echo ""; msg_info "正在检查并安装基础依赖环境 (包含 iptables)..."
     if is_alpine; then
         apk update >/dev/null 2>&1
@@ -433,25 +587,136 @@ install_argo() {
     fi
 }
 
+# 安装 WARP：自建 kernel wireguard tunnel，绝不依赖 cloudflare-warp 的 warp-svc
+# daemon（它会装 nftables rules hijack 出网, pure IPv6 主机上会锁 SSH）。
+# 流程：cloudflare-warp apt 包拿 warp-cli 注册设备 → 提取 private_key →
+#       /etc/wireguard/warp.conf + ip link add warp type wireguard →
+#       iptables fwmark 0xca6c → systemd 持久化。
+# 若是 IPv6-only VPS：进入 install_warp 前 inject_nat64_bootstrap 已经到位；
+# WARP tunnel up 后立即调用 teardown_nat64_bootstrap 解开 NAT64, 后续 IPv4
+# 全部走 warp tunnel, 避免公共 NAT64 拖垮节点稳定性。
 install_warp() {
     if is_alpine; then return; fi
+
+    # === 阶段 1：装 cloudflare-warp (拿到 warp-cli 注册设备) ==============
     if ! command -v warp-cli >/dev/null 2>&1; then
-        msg_info "正在安装 Cloudflare WARP..."
+        msg_info "正在安装 cloudflare-warp (取 warp-cli 注册设备)..."
         if command -v apt-get >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg lsb-release >/dev/null 2>&1
             mkdir -p /usr/share/keyrings
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg 2>/dev/null \
+                | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null
             local dist_codename=""
             if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
             else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $dist_codename main" | tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
-            apt-get update -y >/dev/null 2>&1 && apt-get install -y cloudflare-warp >/dev/null 2>&1
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com $dist_codename main" \
+                > /etc/apt/sources.list.d/cloudflare-client.list 2>/dev/null
+            apt-get update -y >/dev/null 2>&1 || true
+            DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp >/dev/null 2>&1 || true
         elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
         else return 1; fi
     fi
-    if command -v warp-cli >/dev/null 2>&1; then
-        warp-cli --accept-tos registration new >/dev/null 2>&1; warp-cli --accept-tos mode proxy >/dev/null 2>&1
-        warp-cli --accept-tos proxy port 40000 >/dev/null 2>&1; warp-cli --accept-tos connect >/dev/null 2>&1
+    if ! command -v warp-cli >/dev/null 2>&1; then
+        msg_warn "warp-cli 未能安装, WARP tunnel 部署跳过"
+        return 1
     fi
+
+    # === 阶段 2：注册设备 + 提取 identity ================================
+    # 关键：禁掉 warp-svc daemon，否则它会安装 nftables hijack outbound IPv4
+    #       在 pure IPv6 主机上直接锁 SSH。我们只用 warp-cli 注册 + 拿 key，
+    #       真正的 wireguard interface 由 kernel module + 自己 fwmark 接管。
+    systemctl disable --now warp-svc >/dev/null 2>&1 || true
+
+    local REG="/var/lib/cloudflare-warp/registration.json"
+    [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
+    if [ ! -f "$REG" ]; then
+        msg_info "首次注册 Cloudflare WARP 设备..."
+        warp-cli --accept-tos registration new >/dev/null 2>&1 || {
+            msg_warn "warp-cli registration new 失败 (pure IPv6 + NAT64 没起来?), WARP 跳过"; return 1
+        }
+    fi
+    local PRIV IPV4 IPV6
+    PRIV=$(jq -r '.warp.private_key // empty' "$REG" 2>/dev/null)
+    IPV4=$(jq -r '.warp.interface.addresses.v4 // empty' "$REG" 2>/dev/null)
+    IPV6=$(jq -r '.warp.interface.addresses.v6 // empty' "$REG" 2>/dev/null)
+    if [ -z "$PRIV" ] || [ -z "$IPV4" ] || [ -z "$IPV6" ]; then
+        msg_warn "registration.json 解析失败 (PRIV=${PRIV:-N/A}, IPV4=${IPV4:-N/A}, IPV6=${IPV6:-N/A})"; return 1
+    fi
+
+    # === 阶段 3：写 /etc/wireguard/warp.conf + 启动 kernel wireguard =======
+    mkdir -p /etc/wireguard
+    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
+    cat > /etc/wireguard/warp.conf <<EOF
+[Interface]
+PrivateKey = ${PRIV}
+Address = ${IPV4}/32
+Address = ${IPV6}/128
+DNS = 1.1.1.1, 2606:4700:4700::1111
+MTU = 1280
+Table = off
+
+PostUp = ip -4 rule add fwmark 0xca6c lookup 51820
+PostUp = ip -4 route add default dev warp table 51820
+PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100
+PostDown = ip -4 rule del fwmark 0xca6c lookup 51820
+PostDown = ip -4 route del default dev warp table 51820
+PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100
+
+[Peer]
+PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+AllowedIPs = 0.0.0.0/0
+Endpoint = 162.159.193.1:2408
+PersistentKeepalive = 25
+EOF
+    chmod 600 /etc/wireguard/warp.conf
+
+    # 启动 kernel wireguard (Debian 13 默认带 1.0.0, 否则装 wireguard-tools)
+    if ! modprobe wireguard 2>/dev/null && ! is_alpine; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
+        modprobe wireguard 2>/dev/null || true
+    fi
+    ip link delete warp 2>/dev/null || true
+    ip link add warp type wireguard 2>/dev/null
+    wg setconf warp /etc/wireguard/warp.conf 2>/dev/null || {
+        msg_warn "wg setconf 失败, 可能是 kernel 缺 wireguard 模块"; return 1
+    }
+    ip link set mtu 1280 up dev warp
+
+    # iptables fwmark：让本机 system curl/apt 等 IPv4 outbound 也走 warp tunnel
+    iptables -t mangle -C OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null \
+        || iptables -t mangle -A OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null
+    iptables -t mangle -C OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null \
+        || iptables -t mangle -A OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null
+
+    # systemd unit 持久化：开机自动起 wireguard tunnel
+    cat > /etc/systemd/system/warp-sb.service <<'UNIT'
+[Unit]
+Description=Sing-box WARP tunnel (kernel wireguard + fwmark)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'wg setconf warp /etc/wireguard/warp.conf && ip link set mtu 1280 up dev warp'
+ExecStop=/bin/sh -c 'ip link delete warp 2>/dev/null; true'
+RestartSec=3
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    systemctl daemon-reload
+    systemctl enable --now warp-sb.service >/dev/null 2>&1
+
+    msg_success "WARP tunnel 已部署 (kernel wireguard, fwmark 0xca6c → table 51820 → dev warp)"
+
+    # === 阶段 4：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===============
+    # DNS 切回原始上游, IPv4 outbound 改走 warp tunnel (替代 NAT64 兜底)
+    if is_ipv6_only_strict; then
+        teardown_nat64_bootstrap
+    fi
+    return 0
 }
 
 generate_config() {
@@ -488,6 +753,10 @@ generate_config() {
         for d in "${DOMAINS[@]}"; do [ -n "$d" ] && domain_array+="\"$d\","; done
         domain_array=${domain_array%,}
         [ -n "$domain_array" ] && rules_json="{ \"domain_suffix\": [${domain_array}], \"outbound\": \"warp-out\" }, { \"outbound\": \"direct-out\" }"
+    elif [ "$WARP_MODE" == "4" ] && ! is_alpine; then
+        # 原生 IPv6 直连 + 全部 IPv4 强走 WARP (适合 dual-stack 和 pure IPv6 VPS,
+        # 避免 WARP 隧道里再套一层 IPv6 over IPv4)
+        rules_json='{ "ip_version": 6, "outbound": "direct-out" }, { "ip_version": 4, "outbound": "warp-out" }'
     fi
 
     local INBOUNDS=""
@@ -528,19 +797,23 @@ generate_config() {
 {
   "log": { "level": "warn", "timestamp": true },
   "dns": {
-    "servers": [ { "tag": "dns-remote", "type": "udp", "server": "1.1.1.1" } ],
-    "final": "dns-remote",
-    "strategy": "ipv4_only"
+    "servers": [
+      { "tag": "dns-ipv6", "type": "udp", "server": "[2606:4700:4700::1111]" },
+      { "tag": "dns-ipv4", "type": "udp", "server": "1.1.1.1" }
+    ],
+    "final": "dns-ipv6",
+    "strategy": "prefer_ipv4",
+    "independent_cache": true
   },
   "inbounds": [
     $INBOUNDS
   ],
   "outbounds": [
     { "type": "direct", "tag": "direct-out" },
-    { "type": "socks", "tag": "warp-out", "server": "127.0.0.1", "server_port": 40000 },
+    { "type": "direct", "tag": "warp-out", "bind_interface": "warp" },
     { "type": "block", "tag": "block-out" }
   ],
-  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out" }
+  "route": { "rules": [ $rules_json ], "auto_detect_interface": true, "final": "direct-out", "default_domain_resolver": "dns-ipv6" }
 }
 EOF
     save_config
@@ -916,6 +1189,7 @@ manage_warp() {
         local mode_str="原生直连"
         [ "$WARP_MODE" == "2" ] && mode_str="全局 WARP"
         [ "$WARP_MODE" == "3" ] && mode_str="路由分流"
+        [ "$WARP_MODE" == "4" ] && mode_str="原生v6+WARP-v4"
 
         echo -e "${PURPLE}╭━━━ 🌐 ${BG_BLUE} WARP 智能大脑 ${NC} ${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╮${NC}"
         echo -e "${PURPLE}┃${NC} 当前模式: ${GREEN}$mode_str${NC}"
@@ -931,7 +1205,7 @@ manage_warp() {
 
         reading "请选择操作 [0-4]" choice
         case $choice in
-            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" ]] && install_warp ;;
+            1) echo -e "  ➤ [1]=关闭  [2]=全局WARP  [3]=指定分流  [4]=原生v6+WARP-v4"; reading "选择模式" wm; [ -n "$wm" ] && WARP_MODE=$wm; [[ "$WARP_MODE" == "2" || "$WARP_MODE" == "3" || "$WARP_MODE" == "4" ]] && install_warp ;;
             2) reading "输入要追加的域名 (如 netflix.com)" nd; if [ -n "$nd" ]; then if [ -z "$WARP_DOMAINS" ]; then WARP_DOMAINS="$nd"; else WARP_DOMAINS="$WARP_DOMAINS,$nd"; fi; fi ;;
             3) if [ -z "$WARP_DOMAINS" ]; then msg_warn "无可删除域名！"; sleep 1; continue; fi; reading "输入要移除的域名" rm_d; if [ -n "$rm_d" ]; then IFS=',' read -ra DOMAINS <<< "$WARP_DOMAINS"; local new_arr=""; for d in "${DOMAINS[@]}"; do if [ "$d" != "$rm_d" ] && [ -n "$d" ]; then new_arr+="$d,"; fi; done; WARP_DOMAINS=${new_arr%,}; msg_success "已更新！"; fi ;;
             4) WARP_DOMAINS="" ;;
