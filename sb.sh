@@ -248,6 +248,14 @@ teardown_nat64_bootstrap() {
     restore_resolv_conf
     msg_info "NAT64 Bootstrap 已撤销, 日常 IPv4 出站全部交给 WARP tunnel"
 }
+
+# 内部 helper：用于 install_warp() 各 return 1 路径前清理,
+# 避免 IPv6-only NAT64 注入残留 (.sb.bak 未清) 而 WARP 没起来
+_warp_phase_cleanup() {
+    is_ipv6_only_strict || return 0
+    [ -s /etc/resolv.conf.sb.bak ] || return 0
+    teardown_nat64_bootstrap
+}
 # ---------------------------------------------------------------------------
 
 svc_action() {
@@ -554,12 +562,15 @@ install_warp() {
     if ! RESP=$(curl --max-time 30 -fsL "$API_URL" 2>/dev/null) || [ -z "$RESP" ]; then
         msg_warn "fscarmen API 不可达 / 限流 (Cloudflare 1015); WARP tunnel 跳过"
         msg_info "  提示: 等几分钟再重试, 或在 manage_warp menu 里手动启用"
+        _warp_phase_cleanup
         return 1
     fi
     # 验证返回是 JSON 含 private_key 字段
     if ! echo "$RESP" | jq -e '.private_key' >/dev/null 2>&1; then
         echo "$RESP" | head -c 200 | sed 's/^/  /'
-        msg_warn "fscarmen API 返回缺 private_key, WARP 跳过"; return 1
+        msg_warn "fscarmen API 返回缺 private_key, WARP 跳过"
+        _warp_phase_cleanup
+        return 1
     fi
 
     # 解析字段: fscarmen 服务器里 json schema 含
@@ -575,7 +586,7 @@ install_warp() {
     IPV6=$(echo "$RESP" | jq -r '.interface.v6 // .v6 // empty')
     IPV4_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v4 // empty')
     IPV6_ENDPT=$(echo "$RESP" | jq -r '.endpoints[0].v6 // empty')
-    [ -z "$PRIV" ] && { msg_warn "无 private_key, WARP 跳过"; return 1; }
+    [ -z "$PRIV" ] && { msg_warn "无 private_key, WARP 跳过"; _warp_phase_cleanup; return 1; }
     [ -z "$IPV6" ] && IPV6="2606:4700:110::2"
     # Endpoint: IPv6-only VPS 优先用 v6 endpoint (走 eth0 不走 NAT64)
     # 兜底 fallback 162.159.193.1:2408 (NAT64可达, 但延迟可能差)
@@ -634,14 +645,19 @@ EOF
     fi
     if [ ! -d /sys/module/wireguard ]; then
         msg_warn "kernel 无 wireguard 模块且无法 apt install wireguard-tools, WARP 跳过"
+        _warp_phase_cleanup
         return 1
     fi
     ip link delete warp 2>/dev/null || true
     if ! ip link add warp type wireguard 2>/dev/null; then
-        msg_warn "ip link add warp 失败"; return 1
+        msg_warn "ip link add warp 失败"
+        _warp_phase_cleanup
+        return 1
     fi
     if ! wg setconf warp "$WG_OUT" 2>/dev/null; then
-        msg_warn "wg setconf 失败"; return 1
+        msg_warn "wg setconf 失败"
+        _warp_phase_cleanup
+        return 1
     fi
     ip link set mtu 1280 up dev warp
 
