@@ -538,119 +538,85 @@ install_argo() {
 install_warp() {
     if is_alpine; then return; fi
 
-    # === 阶段 1：装 cloudflare-warp (拿到 warp-cli 注册设备) ==============
-    if ! command -v warp-cli >/dev/null 2>&1; then
-        msg_info "正在安装 cloudflare-warp (取 warp-cli 注册设备)..."
-        if command -v apt-get >/dev/null 2>&1; then
-            DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg lsb-release >/dev/null 2>&1
-            mkdir -p /usr/share/keyrings
-            curl -fsSl https://pkg.cloudflareclient.com/pubkey.gpg 2>/dev/null \
-                | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg 2>/dev/null
-            local dist_codename=""
-            if command -v lsb_release >/dev/null 2>&1; then dist_codename=$(lsb_release -cs)
-            else dist_codename=$(grep '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2); [ -z "$dist_codename" ] && dist_codename="stable"; fi
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com $dist_codename main" \
-                > /etc/apt/sources.list.d/cloudflare-client.list 2>/dev/null
-            apt-get update -y >/dev/null 2>&1 || true
-            DEBIAN_FRONTEND=noninteractive apt-get install -y cloudflare-warp >/dev/null 2>&1 || true
-        elif command -v yum >/dev/null 2>&1; then msg_error "WARP 不支持 yum 系系统。"; return 1
-        else return 1; fi
-    fi
-    if ! command -v warp-cli >/dev/null 2>&1; then
-        msg_warn "warp-cli 未能安装, WARP tunnel 部署跳过"
+    # 设计原则：完全绕开 warp-svc daemon (它的 nftables rules 会在第一次
+    # 启动时锁住 SSH outbound/inbound, 在 IPv6-only + NAT64 环境下
+    # warp-cli connect wireserver 亦会卡死)。
+    # 改用 fscarmen 的 Cloudflare WARP 公共注册 endpoint, 直接拿 [Interface]+
+    # [Peer] 完整 wg conf (含 private_key / public_key / assigned v4+IPv6 接口),
+    # 然后 kernel wireguard + 自建 fwmark。完全不需要 daemon, 不装 cloudflare-warp。
+
+    # === 阶段 1：拿 wg conf from fscarmen API ===
+    mkdir -p /etc/wireguard
+    local WG_OUT="/etc/wireguard/warp.conf"
+    msg_info "通过 fscarmen 公共 API 注册 Cloudflare WARP 设备 (NAT64 友好)..."
+    # fscarmen endpoint: https://warp.cloudflare.now.cc/?run=register (or use API variable fallback)
+    local API_URL="https://warp.cloudflare.now.cc/?run=register"
+    local REG_FILE="/tmp/sb.warp.reg"
+    if ! curl -fsL --max-time 30 "$API_URL" -o "$REG_FILE" 2>/dev/null || [ ! -s "$REG_FILE" ]; then
+        msg_warn "fscarmen API 不可达, WARP tunnel 跳过 (NAT64 DNS 可能仍 active, 日常 IPv4 走 NAT64)";
         return 1
     fi
-
-    # === 阶段 2：注册设备 + 提取 identity ================================
-    # 关键：warp-cli 是 client，必须 warp-svc daemon 起来才能连上注册设备。
-    # 注册完后立刻 stop+disable daemon (避免它的 nftables 把 outbound
-    # IPv4/v6 全部 hijack, 在 pure IPv6 上还可能锁 SSH)。真正的 wireguard
-    # interface 由 kernel module + 自己 fwmark 接管。
-    systemctl enable --now warp-svc >/dev/null 2>&1 || {
-        msg_warn "systemctl enable --now warp-svc 失败, WARP 跳过"; return 1
-    }
-    # 等 daemon 真正 ready (systemd active ≠ IPC socket ready, 实测 Debian 13
-    # trixie warp 2026.6 需要 1.5-3s。改 wait 与 daemon-aware retry 双保险)
-    sleep 3
-
-    local REG="/var/lib/cloudflare-warp/registration.json"
-    [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
-    if [ ! -f "$REG" ]; then
-        msg_info "首次注册 Cloudflare WARP 设备..."
-        # 关键：warp-svc 启动后 warp.db 可能残留旧 Consumer record (以前安装
-        # 留下), 此时 registration new 报 'Old registration is still around'.
-        # 先 delete 再 retry new.
-        warp-cli --accept-tos registration delete >/dev/null 2>&1 || true
-        sleep 1
-        local REG_OK=1
-        for try in 1 2 3 4 5; do
-            if warp-cli --accept-tos registration new 2>/dev/null; then REG_OK=0; break; fi
-            sleep 2
-        done
-        if [ $REG_OK -ne 0 ]; then
-            systemctl disable --now warp-svc >/dev/null 2>&1 || true
-            msg_warn "warp-cli registration new 5 次都失败 (pure IPv6 + NAT64 没起来?), WARP 跳过"; return 1
-        fi
+    # fscarmen 实际吐出文本格式 wg conf, 已含 PrivateKey / Address / PublicKey / Endpoint
+    # 但要确认格式兼容
+    if ! head -3 "$REG_FILE" | grep -q "\[Interface\]"; then
+        msg_warn "fscarmen API 返回格式异常 (前 3 行无 [Interface])"
+        head -3 "$REG_FILE" | sed 's/^/  /'
+        return 1
     fi
-    # 注册完成, 立刻 stop+disable daemon, 避免 daemon 接管出网
-    systemctl disable --now warp-svc >/dev/null 2>&1 || true
-    local PRIV IPV4 IPV6
-    PRIV=$(jq -r '.warp.private_key // empty' "$REG" 2>/dev/null)
-    IPV4=$(jq -r '.warp.interface.addresses.v4 // empty' "$REG" 2>/dev/null)
-    IPV6=$(jq -r '.warp.interface.addresses.v6 // empty' "$REG" 2>/dev/null)
-    if [ -z "$PRIV" ] || [ -z "$IPV4" ] || [ -z "$IPV6" ]; then
-        msg_warn "registration.json 解析失败 (PRIV=${PRIV:-N/A}, IPV4=${IPV4:-N/A}, IPV6=${IPV6:-N/A})"; return 1
-    fi
-
-    # === 阶段 3：写 /etc/wireguard/warp.conf + 启动 kernel wireguard =======
-    mkdir -p /etc/wireguard
+    # 套上我们的 fwmark + DNS 配置 (避免 daemon-mode hijack)
     local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
-    cat > /etc/wireguard/warp.conf <<EOF
-[Interface]
-PrivateKey = ${PRIV}
-Address = ${IPV4}/32
-Address = ${IPV6}/128
-DNS = 1.1.1.1, 2606:4700:4700::1111
-MTU = 1280
-Table = off
+    {
+        echo "# Sing-box WARP tunnel — kernel wireguard 自建, 自管 fwmark 0xca6c → table 51820"
+        # 提取接口部分但替换 DNS
+        grep -A20 "^\[Interface\]" "$REG_FILE" | sed -E 's|^DNS.*|DNS = 1.1.1.1, 2606:4700:4700::1111|; s|^MTU.*|MTU = 1280|; s|^Table.*|Table = off|'
+        # DNS 应该已经 set 了; 把 PostUp/PostDown 补上
+        echo "Table = off"
+        echo ""
+        echo "PostUp = ip -4 rule add fwmark 0xca6c lookup 51820"
+        echo "PostUp = ip -4 route add default dev warp table 51820"
+        [ -n "$VPS_IPV6" ] && echo "PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100"
+        echo "PostDown = ip -4 rule del fwmark 0xca6c lookup 51820"
+        echo "PostDown = ip -4 route del default dev warp table 51820"
+        [ -n "$VPS_IPV6" ] && echo "PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100"
+        echo ""
+        # Peer 部分保留
+        grep -A6 "^\[Peer\]" "$REG_FILE"
+        # 兜底: 如果 fscarmen 给的 Endpoint 是 IPv4 (162.159.193.1:2408),
+        # 我们纯 v6 主机拨过去需要 NAT64 gateway (OK, 已测试可工作)
+    } > "$WG_OUT"
+    chmod 600 "$WG_OUT"
+    rm -f "$REG_FILE"
 
-PostUp = ip -4 rule add fwmark 0xca6c lookup 51820
-PostUp = ip -4 route add default dev warp table 51820
-PostUp = ip -4 rule add from 192.168.255.0/24 lookup main priority 100
-PostDown = ip -4 rule del fwmark 0xca6c lookup 51820
-PostDown = ip -4 route del default dev warp table 51820
-PostDown = ip -4 rule del from 192.168.255.0/24 lookup main priority 100
-
-[Peer]
-PublicKey = bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-AllowedIPs = 0.0.0.0/0
-Endpoint = 162.159.193.1:2408
-PersistentKeepalive = 25
-EOF
-    chmod 600 /etc/wireguard/warp.conf
-
-    # 启动 kernel wireguard (Debian 13 默认带 1.0.0, 否则装 wireguard-tools)
+    # === 阶段 2：启动 kernel wireguard ================================
     if ! modprobe wireguard 2>/dev/null && ! is_alpine; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools >/dev/null 2>&1 || true
         modprobe wireguard 2>/dev/null || true
     fi
+    if [ ! -d /sys/module/wireguard ]; then
+        msg_warn "kernel 无 wireguard 模块且无法 apt install wireguard-tools, WARP 跳过"
+        return 1
+    fi
     ip link delete warp 2>/dev/null || true
-    ip link add warp type wireguard 2>/dev/null
-    wg setconf warp /etc/wireguard/warp.conf 2>/dev/null || {
-        msg_warn "wg setconf 失败, 可能是 kernel 缺 wireguard 模块"; return 1
-    }
+    if ! ip link add warp type wireguard 2>/dev/null; then
+        msg_warn "ip link add warp type wireguard 失败 (kernel 缺 wireguard?)"
+        return 1
+    fi
+    if ! wg setconf warp "$WG_OUT" 2>/dev/null; then
+        msg_warn "wg setconf 失败"
+        return 1
+    fi
     ip link set mtu 1280 up dev warp
 
-    # iptables fwmark：让本机 system curl/apt 等 IPv4 outbound 也走 warp tunnel
+    # iptables fwmark: 本机 system curl/apt 等 IPv4 outbound 走 warp tunnel
     iptables -t mangle -C OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null \
         || iptables -t mangle -A OUTPUT -p tcp --dport 443 -j MARK --set-mark 0xca6c 2>/dev/null
     iptables -t mangle -C OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null \
         || iptables -t mangle -A OUTPUT -p tcp --dport 80 -j MARK --set-mark 0xca6c 2>/dev/null
 
-    # systemd unit 持久化：开机自动起 wireguard tunnel
+    # === 阶段 3：systemd 持久化 (开机自动起 wg tunnel) =================
     cat > /etc/systemd/system/warp-sb.service <<'UNIT'
 [Unit]
-Description=Sing-box WARP tunnel (kernel wireguard + fwmark)
+Description=Sing-box WARP tunnel (kernel wireguard + fwmark, daemon-free)
 After=network-online.target
 Wants=network-online.target
 
@@ -668,10 +634,12 @@ UNIT
     systemctl daemon-reload
     systemctl enable --now warp-sb.service >/dev/null 2>&1
 
-    msg_success "WARP tunnel 已部署 (kernel wireguard, fwmark 0xca6c → table 51820 → dev warp)"
+    msg_success "WARP tunnel 已部署 (fscarmen API + kernel wireguard + fwmark, daemon-free)"
+    msg_info "  warp link: $(ip link show warp | grep -oE 'mtu [0-9]+' | head -1)"
+    msg_info "  endpoint: $(awk '/^\[Peer\]/,EOF' /etc/wireguard/warp.conf | grep Endpoint | head -1 | tr -d ' \n')"
 
-    # === 阶段 4：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===============
-    # DNS 切回原始上游, IPv4 outbound 改走 warp tunnel (替代 NAT64 兜底)
+    # === 阶段 4：撤销 NAT64 Bootstrap（IPv6-only 主机才需要） ===========
+    # WARP up 后, 日常 IPv4 出站改走 warp tunnel (表 51820), 不再依赖 NAT64
     if is_ipv6_only_strict; then
         teardown_nat64_bootstrap
     fi
