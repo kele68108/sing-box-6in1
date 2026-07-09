@@ -188,7 +188,7 @@ get_vps_ipv6() {
     ip -6 addr show scope global 2>/dev/null | awk '/inet6 / {print $2}' | cut -d/ -f1 | head -1
 }
 
-# 检测 tayga NAT64 是否已经被部署好（桥接 IPv6→IPv4 outbound）
+# 检测 tayga NAT64 是否已经被部署好（仅作 diagnostic, 当前 bootstrap 不用）
 nat64_active() {
     [ -d /sys/class/net/nat64 ] || return 1
     ip link show nat64 2>/dev/null | grep -q "state UP" || return 1
@@ -197,116 +197,56 @@ nat64_active() {
     return 0
 }
 
-# 备份 /etc/resolv.conf 到 .sb.bak，仅第一次有效。返回 0 表示已备份过
-_SB_RESOLV_BAK=""
+# 备份 /etc/resolv.conf。仅当 .sb.bak 不存在时才备份 (幂等)
 backup_resolv_conf() {
-    if [ -n "$_SB_RESOLV_BAK" ]; then return 0; fi
-    if [ ! -f /etc/resolv.conf ]; then return 1; fi
-    _SB_RESOLV_BAK=$(cat /etc/resolv.conf)
-    [ "$_SB_RESOLV_BAK" = "$(cat /etc/resolv.conf 2>/dev/null)" ] && cp /etc/resolv.conf /etc/resolv.conf.sb.bak 2>/dev/null
-    export _SB_RESOLV_BAK
-    return 0
+    [ -f /etc/resolv.conf ] || return 1
+    [ -f /etc/resolv.conf.sb.bak ] && return 0
+    cp /etc/resolv.conf /etc/resolv.conf.sb.bak 2>/dev/null && return 0
+    return 1
 }
 
 # 把 /etc/resolv.conf 还原到 install 之前的状态，撤销 bootstrap。
 restore_resolv_conf() {
     if [ -s /etc/resolv.conf.sb.bak ]; then
-        cat /etc/resolv.conf.sb.bak > /etc/resolv.conf 2>/dev/null
-        rm -f /etc/resolv.conf.sb.bak
-        _SB_RESOLV_BAK=""
-        export _SB_RESOLV_BAK
+        mv -f /etc/resolv.conf.sb.bak /etc/resolv.conf
         msg_success "/etc/resolv.conf 已恢复原状，NAT64 Bootstrap 已撤销"
     fi
 }
 
-# 部署临时的 NAT64 + DNS64 bootstrap，仅在 IPv6-only 主机上启用。
-# 全部走本地 unbound 通道：把 /etc/resolv.conf 临时切到 127.0.0.1，
-# 等 WARP tunnel 起来后 install_warp() 末尾会调用 teardown_nat64_bootstrap() 回收。
+# 纯 IPv6 VPS 的 NAT64 DNS 注入 (用完即焚，不依赖 tayga/unbound 自建)：
+# 1) 检测到 pure IPv6 时直接往 /etc/resolv.conf 写入公共 NAT64 DNS。
+#    这些 DNS 服务器 (fscarmen / Hetzner / Cloudflare IPv6 组合) 自带 DNS64 合成
+#    A → 64:ff9b::<A> AAAA；VPS provider 通常在网络层默认配置了 64:ff9b::/96
+#    NAT64 gateway, 所以 curl / apt 直接走 IPv6 socket 即可拿 IPv4 资源。
+# 2) 不需要自建 tayga NAT64 daemon, 不需要 unbound DNS64 转发。
+# 3) install_warp() 末尾调用 teardown_nat64_bootstrap() 把 /etc/resolv.conf
+#    还原回去, 日常 IPv4 全部交给 WARP tunnel 出网, 不再走公共 NAT64。
 inject_nat64_bootstrap() {
     is_ipv6_only_strict || { msg_info "已检测到 IPv4 出口，跳过 NAT64 Bootstrap"; return 0; }
-    backup_resolv_conf || { msg_warn "resolv.conf 备份失败"; return 1; }
-    [ -s /etc/resolv.conf.sb.bak ] || { msg_warn "首次启动 resolv.conf 备份缺失，无法 bootstrap"; return 1; }
 
-    if nat64_active && ss -tnlup 2>/dev/null | grep -qE ":53\b.*unbound"; then
-        cat > /etc/resolv.conf <<EOF
-# sb.sh NAT64 Bootstrap — WARP 起来后自动撤销
-nameserver 127.0.0.1
-EOF
-        msg_info "NAT64 Bootstrap 已就绪 (复用既有 unbound+tayga)"
+    # 幂等: 已经注入过就不重复
+    if grep -q "2a00:1098:2b::1" /etc/resolv.conf 2>/dev/null; then
+        msg_info "NAT64 DNS 已就位 (复用)"
         return 0
     fi
 
-    local VPS_IPV6; VPS_IPV6=$(get_vps_ipv6)
-    [ -z "$VPS_IPV6" ] && { msg_warn "VPS 公网 IPv6 探测失败，NAT64 装不下"; return 1; }
-
-    msg_info "检测到纯 IPv6 环境，部署临时 NAT64/DNS64 Bootstrap (WARP 起来后自动撤销)..."
-    DEBIAN_FRONTEND=noninteractive apt-get install -y tayga unbound >/dev/null 2>&1 || {
-        msg_warn "apt install tayga/unbound 失败，NAT64 Bootstrap 无法启用"; return 1
-    }
-    mkdir -p /var/lib/tayga
-    cat > /etc/tayga.conf <<EOF
-tun-device nat64
-ipv4-addr 192.168.255.1
-ipv6-addr ${VPS_IPV6}
-prefix 64:ff9b::/96
-dynamic-pool 192.168.255.0/24
-data-dir /var/lib/tayga
-EOF
-    systemctl enable --now tayga >/dev/null 2>&1
-    sleep 1; systemctl restart tayga >/dev/null 2>&1
-    sleep 2
-    ip link set nat64 up 2>/dev/null || true
-    ip addr add 192.168.255.1/32 dev nat64 2>/dev/null || true
-    ip -6 route add 64:ff9b::/96 dev nat64 2>/dev/null || true
-    ip -4 route add 192.168.255.0/24 dev nat64 2>/dev/null || true
-    sysctl -wq net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
-
-    mkdir -p /etc/unbound/unbound.conf.d
-    cat > /etc/unbound/unbound.conf.d/dns64.conf <<'EOF'
-server:
-    module-config: "dns64 validator iterator"
-    interface: 0.0.0.0
-    interface: ::0
-    port: 53
-    do-ip4: yes
-    do-ip6: yes
-    do-udp: yes
-    do-tcp: yes
-    num-threads: 1
-    msg-cache-size: 4m
-    rrset-cache-size: 4m
-
-forward-zone:
-    name: "."
-    forward-addr: 2606:4700:4700::1111
-    forward-addr: 2001:4860:4860::8888
-EOF
-    systemctl enable --now unbound >/dev/null 2>&1
-    sleep 1; systemctl restart unbound >/dev/null 2>&1
-    sleep 1
-    if ! ss -tnlup 2>/dev/null | grep -qE ":53\b.*unbound"; then
-        msg_warn "unbound 未监听 :53, NAT64 Bootstrap 半失活, 请确认 systemd-resolved 没抢端口"
-    fi
-    nat64_active || { msg_warn "tayga/nat64 device 状态异常, IPv4 桥接可能不稳"; }
+    msg_warn "检测到纯 IPv6 环境，临时注入公共 NAT64 DNS 以拉取底层依赖..."
+    backup_resolv_conf || msg_warn "resolv.conf 备份失败, 后续 teardown 手动恢复"
     cat > /etc/resolv.conf <<EOF
 # sb.sh NAT64 Bootstrap — WARP 起来后自动撤销
-nameserver 127.0.0.1
+nameserver 2a00:1098:2b::1
+nameserver 2a01:4f8:c2c:123f::1
+nameserver 2606:4700:4700::1111
 EOF
-    msg_success "NAT64/DNS64 Bootstrap 部署完成 (临时)"
+    sleep 2
+    msg_success "公共 NAT64 DNS 已注入 (用完即焚)"
 }
 
-# 撤销 bootstrap: 恢复 /etc/resolv.conf, 停 unbound + tayga。
+# 撤销 NAT64 Bootstrap：mv 回原 /etc/resolv.conf 即可，无需停服务
 teardown_nat64_bootstrap() {
-    if [ ! -s /etc/resolv.conf.sb.bak ]; then
-        return 0
-    fi
+    [ -s /etc/resolv.conf.sb.bak ] || return 0
     restore_resolv_conf
-    # 用完即焚：停 unbound + tayga，让 WARP tunnel 接管所有 IPv4 出网
-    systemctl stop unbound >/dev/null 2>&1 || true
-    systemctl stop tayga >/dev/null 2>&1 || true
-    systemctl disable --now tayga unbound >/dev/null 2>&1 || true
-    ip link delete nat64 >/dev/null 2>&1 || true
-    msg_info "NAT64/DNS64 Bootstrap 已撤销, 日常 IPv4 出站全部交给 WARP tunnel"
+    msg_info "NAT64 Bootstrap 已撤销, 日常 IPv4 出站全部交给 WARP tunnel"
 }
 # ---------------------------------------------------------------------------
 
