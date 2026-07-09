@@ -577,7 +577,11 @@ install_warp() {
     [ ! -f "$REG" ] && REG="/var/lib/warp-svc/registration.json"
     if [ ! -f "$REG" ]; then
         msg_info "首次注册 Cloudflare WARP 设备..."
-        # 重试 3 次, 第一次常因 IPC socket 还没 listen 失败
+        # 关键：warp-svc 启动后 warp.db 可能残留旧 Consumer record (以前安装
+        # 留下), 此时 registration new 报 'Old registration is still around'.
+        # 先 delete 再 retry new.
+        warp-cli --accept-tos registration delete >/dev/null 2>&1 || true
+        sleep 1
         local REG_OK=1
         for try in 1 2 3 4 5; do
             if warp-cli --accept-tos registration new 2>/dev/null; then REG_OK=0; break; fi
